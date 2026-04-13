@@ -215,7 +215,7 @@ class TestRelationshipUpdate:
         assert updated.total_turns == 6
 
     def test_last_updated_changes(self):
-        old_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        old_time = datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp()
         rel = RelationshipState(last_updated=old_time)
         affect = AffectSignal()
         updated = update_relationship(affect, rel)
@@ -372,9 +372,9 @@ class TestDBMigration:
         table_names = {r["name"] for r in tables}
         assert "emotion_log" in table_names
 
-    def test_schema_version_is_2(self, kortex_db):
+    def test_schema_version_is_3(self, kortex_db):
         version = kortex_db._get_conn().execute("PRAGMA user_version").fetchone()[0]
-        assert version == 2
+        assert version == 3
 
 
 # ======================================================================== #

@@ -1,5 +1,4 @@
 import time
-from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -30,7 +29,7 @@ def _episode(
         entities=entities,
         topics=topics,
         salience=salience,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=time.time(),
     )
     kortex_db.insert_episode(ep)
     return ep
@@ -489,10 +488,10 @@ class TestProviderIntegration:
 
 
 class TestSchemaAndMigration:
-    def test_schema_version_stays_two(self):
+    def test_schema_version_stays_three(self):
         from kortex import db as db_module
 
-        assert db_module.SCHEMA_VERSION == 2
+        assert db_module.SCHEMA_VERSION == 3
 
     def test_existing_v2_db_still_has_entity_links(self, tmp_path):
         db = KortexDB(str(tmp_path / "test.db"))
@@ -504,6 +503,56 @@ class TestSchemaAndMigration:
             .fetchone()
         )
         assert table[0] == "entity_links"
+        db.close()
+
+    def test_populated_v2_db_migrates_to_v3(self, populated_v2_db_path):
+        db = KortexDB(populated_v2_db_path)
+        conn = db._get_conn()
+
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
+
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert str(journal_mode).lower() == "wal"
+
+        episodes_columns = {
+            row[1]: row[2]
+            for row in conn.execute("PRAGMA table_info(episodes)").fetchall()
+        }
+        facts_columns = {
+            row[1]: row[2]
+            for row in conn.execute("PRAGMA table_info(facts)").fetchall()
+        }
+
+        assert episodes_columns["timestamp"].upper() == "REAL"
+        assert episodes_columns["user_id"].upper() == "TEXT"
+        assert facts_columns["first_seen"].upper() == "REAL"
+        assert facts_columns["user_id"].upper() == "TEXT"
+
+        stored_type = conn.execute(
+            "SELECT typeof(timestamp) FROM episodes WHERE id=1"
+        ).fetchone()[0]
+        assert stored_type == "real"
+
+        ep = db.get_episode(1)
+        assert ep is not None
+        assert isinstance(ep.timestamp, float)
+        assert ep.user_id == "__default__"
+
+        fact = db.get_fact(1)
+        assert fact is not None
+        assert isinstance(fact.first_seen, float)
+        assert fact.valid_from == fact.first_seen
+        assert fact.user_id == "__default__"
+
+        rel = db.get_relationship()
+        assert rel.user_id == "__default__"
+
+        schema_version = conn.execute(
+            "SELECT version FROM kortex_schema_version"
+        ).fetchone()[0]
+        assert schema_version == 3
+
         db.close()
 
 

@@ -624,7 +624,7 @@ class TestDBHighConfidenceReflections:
 
 class TestDBDecayReflections:
     def test_decays_old_reflections(self, kortex_db, episode_in_db):
-        old_time = datetime.now(timezone.utc) - timedelta(days=60)
+        old_time = (datetime.now(timezone.utc) - timedelta(days=60)).timestamp()
         r = Reflection(
             kind="pattern",
             text="Old pattern that should decay over time",
@@ -634,7 +634,7 @@ class TestDBDecayReflections:
         r.id = kortex_db.insert_reflection(r)
         kortex_db._get_conn().execute(
             "UPDATE reflections SET last_reinforced=? WHERE id=?",
-            (old_time.isoformat(), r.id),
+            (old_time, r.id),
         )
         kortex_db._get_conn().commit()
 
@@ -657,7 +657,7 @@ class TestDBDecayReflections:
         assert count == 0
 
     def test_floor_at_005(self, kortex_db, episode_in_db):
-        old_time = datetime.now(timezone.utc) - timedelta(days=60)
+        old_time = (datetime.now(timezone.utc) - timedelta(days=60)).timestamp()
         r = Reflection(
             kind="mistake",
             text="Near-floor confidence reflection to test floor",
@@ -667,7 +667,7 @@ class TestDBDecayReflections:
         r.id = kortex_db.insert_reflection(r)
         kortex_db._get_conn().execute(
             "UPDATE reflections SET last_reinforced=? WHERE id=?",
-            (old_time.isoformat(), r.id),
+            (old_time, r.id),
         )
         kortex_db._get_conn().commit()
 

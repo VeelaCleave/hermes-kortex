@@ -1,6 +1,6 @@
 import json
 import threading
-from datetime import datetime, timezone
+import time
 from pathlib import Path
 
 import pytest
@@ -18,7 +18,7 @@ def _episode(kortex_db, summary="episode summary", session_id="s1"):
         user_text="user message",
         assistant_text="assistant message",
         summary=summary,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=time.time(),
         salience=0.6,
     )
     kortex_db.insert_episode(episode)
