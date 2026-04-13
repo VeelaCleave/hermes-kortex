@@ -164,50 +164,6 @@ _PROJECT_PATTERNS = [
     ),
 ]
 
-# "I'm a developer", "I work at Google", "I live in London"
-_IDENTITY_PATTERNS = [
-    (
-        re.compile(r"\bI(?:'m| am) (?:a |an )?(\w[\w\s]{2,30}?)(?:\.|,|!|\?|$)", re.I),
-        "is",
-    ),
-    (re.compile(r"\bI work (?:at|for)\s+(.+?)(?:\.|,|!|\?|$)", re.I), "works_at"),
-    (re.compile(r"\bI live in\s+(.+?)(?:\.|,|!|\?|$)", re.I), "lives_in"),
-    (re.compile(r"\bmy name is\s+(.+?)(?:\.|,|!|\?|$)", re.I), "named"),
-    (re.compile(r"\bcall me\s+(.+?)(?:\.|,|!|\?|$)", re.I), "named"),
-    (
-        re.compile(
-            r"\bI (?:work on|'m working on|am working on)\s+(.+?)(?:\.|,|!|\?|$)", re.I
-        ),
-        "works_on",
-    ),
-]
-
-# "We decided to use X", "The project uses X", "We're going with X"
-_PROJECT_PATTERNS = [
-    (
-        re.compile(r"\bwe (?:decided|agreed|chose) to\s+(.+?)(?:\.|,|!|\?|$)", re.I),
-        "decision",
-    ),
-    (
-        re.compile(
-            r"\b(?:the |our )?project (?:uses|is using|will use)\s+(.+?)(?:\.|,|!|\?|$)",
-            re.I,
-        ),
-        "project_uses",
-    ),
-    (
-        re.compile(r"\bwe'?re going (?:with|to use)\s+(.+?)(?:\.|,|!|\?|$)", re.I),
-        "decision",
-    ),
-    (
-        re.compile(
-            r"\b(?:the |our )?(?:stack|tech stack) (?:is|includes)\s+(.+?)(?:\.|,|!|\?|$)",
-            re.I,
-        ),
-        "stack",
-    ),
-]
-
 _FACT_STOPWORDS = frozenset(
     {
         "it",

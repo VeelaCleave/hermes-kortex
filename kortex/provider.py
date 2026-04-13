@@ -14,9 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from .config import KortexConfig, load_kortex_config
 from .db import KortexDB
+from .affect import score_affect
 from .ingest import Ingestor
-from .models import Episode, Fact, OpenLoop
+from .models import AffectSignal, Episode, Fact, OpenLoop, RelationshipState
 from .recall import Recall
+from .relationship import update_relationship
 
 logger = logging.getLogger(__name__)
 
@@ -175,11 +177,24 @@ class KortexProvider(MemoryProvider):
                     self._ingestor.resolve_answered_loops(assistant_content)
                     self._ingestor.resolve_completed_commitments(assistant_content)
 
+                affect = score_affect(user_content, assistant_content)
+                if affect.is_significant:
+                    self._db.insert_emotion_log(affect, ep.id, session_id=sid)
+
+                rel = self._db.get_relationship()
+                days_since = 0.0
+                if rel.total_turns > 0:
+                    delta = ep.timestamp - rel.last_updated
+                    days_since = delta.total_seconds() / 86400
+                updated_rel = update_relationship(affect, rel, days_since)
+                self._db.upsert_relationship(updated_rel)
+
                 logger.debug(
-                    "KORTEX ingested turn %d (salience=%.2f, valence=%d)",
+                    "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
                     ep.turn_index,
                     ep.salience,
                     ep.valence,
+                    affect.dominant_emotion,
                 )
             except Exception:
                 logger.exception("KORTEX sync_turn failed")
@@ -361,6 +376,7 @@ class KortexProvider(MemoryProvider):
         loops = self._db.get_open_loops(limit=1000)
         reflections = self._db.get_reflections(limit=1000)
         rel = self._db.get_relationship()
+        recent_emotions = self._db.get_recent_emotions(limit=5)
 
         return json.dumps(
             {
@@ -369,11 +385,20 @@ class KortexProvider(MemoryProvider):
                 "open_loops": len(loops),
                 "reflections": len(reflections),
                 "relationship": {
-                    "warmth": rel.warmth,
-                    "trust": rel.trust,
-                    "tension": rel.tension,
-                    "familiarity": rel.familiarity,
+                    "warmth": round(rel.warmth, 3),
+                    "trust": round(rel.trust, 3),
+                    "tension": round(rel.tension, 3),
+                    "familiarity": round(rel.familiarity, 3),
+                    "humor": round(rel.humor, 3),
                     "total_turns": rel.total_turns,
                 },
+                "recent_emotional_state": [
+                    {
+                        "emotion": e.dominant_emotion,
+                        "valence": e.valence,
+                        "arousal": e.arousal,
+                    }
+                    for e in recent_emotions[:3]
+                ],
             }
         )

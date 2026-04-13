@@ -176,6 +176,74 @@ class RelationshipState:
 
 
 @dataclass
+class AffectSignal:
+    """Per-turn emotional affect detection result."""
+
+    frustration: float = 0.0
+    warmth: float = 0.0
+    humor: float = 0.0
+    hostility: float = 0.0
+    gratitude: float = 0.0
+    anxiety: float = 0.0
+    excitement: float = 0.0
+    trust_signal: float = 0.0
+    valence: float = 0.0  # -1.0 (negative) to +1.0 (positive)
+    arousal: float = 0.0  # 0.0 (calm) to 1.0 (intense)
+    dominant_emotion: str = "neutral"
+    is_sarcastic: bool = False
+
+    @property
+    def is_significant(self) -> bool:
+        """Whether this signal is worth storing (any dimension > threshold)."""
+        return self.arousal > 0.2 or abs(self.valence) > 0.2
+
+    def to_compact_text(self) -> str:
+        """Brief human-readable summary for context injection."""
+        if not self.is_significant:
+            return ""
+        parts = []
+        if self.dominant_emotion != "neutral":
+            parts.append(self.dominant_emotion)
+        if self.is_sarcastic:
+            parts.append("sarcastic")
+        intensity = "mild" if self.arousal < 0.5 else "strong"
+        return f"[{intensity} {', '.join(parts)}]" if parts else ""
+
+    def to_db_row(self) -> dict:
+        return {
+            "frustration": self.frustration,
+            "warmth": self.warmth,
+            "humor": self.humor,
+            "hostility": self.hostility,
+            "gratitude": self.gratitude,
+            "anxiety": self.anxiety,
+            "excitement": self.excitement,
+            "trust_signal": self.trust_signal,
+            "valence": self.valence,
+            "arousal": self.arousal,
+            "dominant_emotion": self.dominant_emotion,
+            "is_sarcastic": int(self.is_sarcastic),
+        }
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "AffectSignal":
+        return cls(
+            frustration=row["frustration"],
+            warmth=row["warmth"],
+            humor=row["humor"],
+            hostility=row["hostility"],
+            gratitude=row["gratitude"],
+            anxiety=row["anxiety"],
+            excitement=row["excitement"],
+            trust_signal=row["trust_signal"],
+            valence=row["valence"],
+            arousal=row["arousal"],
+            dominant_emotion=row["dominant_emotion"],
+            is_sarcastic=bool(row["is_sarcastic"]),
+        )
+
+
+@dataclass
 class IdentityDelta:
     """A proposed change to the agent's self-model / SOUL.md."""
 

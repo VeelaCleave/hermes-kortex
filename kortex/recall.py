@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from .config import KortexConfig
 from .db import KortexDB
-from .models import Episode, Fact, OpenLoop, Reflection, RelationshipState
+from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,9 @@ class Recall:
 
         relationship = self._db.get_relationship()
         rel_text = relationship.to_compact_text()
+        emotional_trajectory = self._build_emotional_trajectory(session_id)
+        if emotional_trajectory:
+            rel_text = f"{rel_text}\n{emotional_trajectory}"
         rel_budget = self._config.budget.get("relationship_state", 200)
         rel_text = self._trim_to_budget(rel_text, rel_budget)
         if relationship.total_turns > 0:
@@ -149,6 +152,47 @@ class Recall:
 
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
+
+    def _build_emotional_trajectory(self, session_id: str = "") -> str:
+        trajectory = self._db.get_emotional_trajectory(
+            limit=5, session_id=session_id or None
+        )
+        if not trajectory:
+            return ""
+
+        recent_emotions = [
+            entry["emotion"] for entry in trajectory if entry["emotion"] != "neutral"
+        ]
+        if not recent_emotions:
+            return ""
+
+        recent_valences = [entry["valence"] for entry in trajectory]
+        avg_valence = sum(recent_valences) / len(recent_valences)
+
+        trend = "neutral"
+        if len(recent_valences) >= 2:
+            first_half = recent_valences[len(recent_valences) // 2 :]
+            second_half = recent_valences[: len(recent_valences) // 2]
+            if first_half and second_half:
+                first_avg = sum(first_half) / len(first_half)
+                second_avg = sum(second_half) / len(second_half)
+                if second_avg - first_avg > 0.15:
+                    trend = "improving"
+                elif first_avg - second_avg > 0.15:
+                    trend = "declining"
+
+        unique_emotions = []
+        seen = set()
+        for e in recent_emotions[:3]:
+            if e not in seen:
+                unique_emotions.append(e)
+                seen.add(e)
+
+        parts = [f"Recent mood: {', '.join(unique_emotions)}"]
+        if trend != "neutral":
+            parts.append(f"(trend: {trend})")
+
+        return " ".join(parts)
 
     def _rank_episode(self, ep: Episode, query: str, now: datetime) -> float:
         # Recency: exponential decay with configurable half-life

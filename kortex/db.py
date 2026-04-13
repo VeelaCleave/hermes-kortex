@@ -15,11 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import Episode, Fact, OpenLoop, Reflection, RelationshipState
+from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -188,6 +188,29 @@ CREATE TABLE IF NOT EXISTS entity_links (
 
 CREATE INDEX IF NOT EXISTS idx_links_src ON entity_links(src_type, src_id);
 CREATE INDEX IF NOT EXISTS idx_links_dst ON entity_links(dst_type, dst_id);
+
+CREATE TABLE IF NOT EXISTS emotion_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id          INTEGER REFERENCES episodes(id),
+    session_id          TEXT NOT NULL DEFAULT '',
+    timestamp           TEXT NOT NULL,
+    frustration         REAL NOT NULL DEFAULT 0.0,
+    warmth              REAL NOT NULL DEFAULT 0.0,
+    humor               REAL NOT NULL DEFAULT 0.0,
+    hostility           REAL NOT NULL DEFAULT 0.0,
+    gratitude           REAL NOT NULL DEFAULT 0.0,
+    anxiety             REAL NOT NULL DEFAULT 0.0,
+    excitement          REAL NOT NULL DEFAULT 0.0,
+    trust_signal        REAL NOT NULL DEFAULT 0.0,
+    valence             REAL NOT NULL DEFAULT 0.0,
+    arousal             REAL NOT NULL DEFAULT 0.0,
+    dominant_emotion    TEXT NOT NULL DEFAULT 'neutral',
+    is_sarcastic        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_emotion_log_episode ON emotion_log(episode_id);
+CREATE INDEX IF NOT EXISTS idx_emotion_log_ts ON emotion_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_emotion_log_session ON emotion_log(session_id);
 """
 
 
@@ -223,13 +246,44 @@ class KortexDB:
     def _init_schema(self) -> None:
         conn = self._get_conn()
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < SCHEMA_VERSION:
+        if version < 1:
             conn.executescript(_SCHEMA_SQL)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
             logger.info(
                 "KORTEX DB initialized (v%d) at %s", SCHEMA_VERSION, self._db_path
             )
+        elif version < SCHEMA_VERSION:
+            self._migrate(conn, version)
+
+    def _migrate(self, conn: sqlite3.Connection, from_version: int) -> None:
+        if from_version < 2:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS emotion_log (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    episode_id          INTEGER REFERENCES episodes(id),
+                    session_id          TEXT NOT NULL DEFAULT '',
+                    timestamp           TEXT NOT NULL,
+                    frustration         REAL NOT NULL DEFAULT 0.0,
+                    warmth              REAL NOT NULL DEFAULT 0.0,
+                    humor               REAL NOT NULL DEFAULT 0.0,
+                    hostility           REAL NOT NULL DEFAULT 0.0,
+                    gratitude           REAL NOT NULL DEFAULT 0.0,
+                    anxiety             REAL NOT NULL DEFAULT 0.0,
+                    excitement          REAL NOT NULL DEFAULT 0.0,
+                    trust_signal        REAL NOT NULL DEFAULT 0.0,
+                    valence             REAL NOT NULL DEFAULT 0.0,
+                    arousal             REAL NOT NULL DEFAULT 0.0,
+                    dominant_emotion    TEXT NOT NULL DEFAULT 'neutral',
+                    is_sarcastic        INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_emotion_log_episode ON emotion_log(episode_id);
+                CREATE INDEX IF NOT EXISTS idx_emotion_log_ts ON emotion_log(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_emotion_log_session ON emotion_log(session_id);
+            """)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+        logger.info("KORTEX DB migrated to v%d at %s", SCHEMA_VERSION, self._db_path)
 
     # -- Episodes ------------------------------------------------------------
 
@@ -721,6 +775,109 @@ class KortexDB:
             )
             return cur.lastrowid
 
+    # -- Emotion Log ---------------------------------------------------------
+
+    def insert_emotion_log(
+        self,
+        affect: AffectSignal,
+        episode_id: int,
+        session_id: str = "",
+        timestamp: Optional[datetime] = None,
+    ) -> int:
+        ts = (timestamp or datetime.now(timezone.utc)).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """INSERT INTO emotion_log
+                   (episode_id, session_id, timestamp, frustration, warmth, humor,
+                    hostility, gratitude, anxiety, excitement, trust_signal,
+                    valence, arousal, dominant_emotion, is_sarcastic)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    episode_id,
+                    session_id,
+                    ts,
+                    affect.frustration,
+                    affect.warmth,
+                    affect.humor,
+                    affect.hostility,
+                    affect.gratitude,
+                    affect.anxiety,
+                    affect.excitement,
+                    affect.trust_signal,
+                    affect.valence,
+                    affect.arousal,
+                    affect.dominant_emotion,
+                    int(affect.is_sarcastic),
+                ),
+            )
+            return cur.lastrowid
+
+    def get_recent_emotions(
+        self, limit: int = 10, session_id: Optional[str] = None
+    ) -> List[AffectSignal]:
+        if session_id:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM emotion_log WHERE session_id=? ORDER BY timestamp DESC LIMIT ?",
+                    (session_id, limit),
+                )
+                .fetchall()
+            )
+        else:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM emotion_log ORDER BY timestamp DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            )
+        return [self._row_to_affect_signal(r) for r in rows]
+
+    def get_emotion_for_episode(self, episode_id: int) -> Optional[AffectSignal]:
+        row = (
+            self._get_conn()
+            .execute("SELECT * FROM emotion_log WHERE episode_id=?", (episode_id,))
+            .fetchone()
+        )
+        return self._row_to_affect_signal(row) if row else None
+
+    def get_emotional_trajectory(
+        self, limit: int = 20, session_id: Optional[str] = None
+    ) -> List[dict]:
+        """Get recent emotion entries as compact dicts for trajectory analysis."""
+        if session_id:
+            rows = (
+                self._get_conn()
+                .execute(
+                    """SELECT timestamp, valence, arousal, dominant_emotion
+                       FROM emotion_log WHERE session_id=?
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (session_id, limit),
+                )
+                .fetchall()
+            )
+        else:
+            rows = (
+                self._get_conn()
+                .execute(
+                    """SELECT timestamp, valence, arousal, dominant_emotion
+                       FROM emotion_log ORDER BY timestamp DESC LIMIT ?""",
+                    (limit,),
+                )
+                .fetchall()
+            )
+        return [
+            {
+                "timestamp": r["timestamp"],
+                "valence": r["valence"],
+                "arousal": r["arousal"],
+                "emotion": r["dominant_emotion"],
+            }
+            for r in rows
+        ]
+
     # -- Row mappers ---------------------------------------------------------
 
     @staticmethod
@@ -799,6 +956,23 @@ class KortexDB:
             volatility=row["volatility"],
             last_updated=datetime.fromisoformat(row["last_updated"]),
             total_turns=row["total_turns"],
+        )
+
+    @staticmethod
+    def _row_to_affect_signal(row: sqlite3.Row) -> AffectSignal:
+        return AffectSignal(
+            frustration=row["frustration"],
+            warmth=row["warmth"],
+            humor=row["humor"],
+            hostility=row["hostility"],
+            gratitude=row["gratitude"],
+            anxiety=row["anxiety"],
+            excitement=row["excitement"],
+            trust_signal=row["trust_signal"],
+            valence=row["valence"],
+            arousal=row["arousal"],
+            dominant_emotion=row["dominant_emotion"],
+            is_sarcastic=bool(row["is_sarcastic"]),
         )
 
     def close(self) -> None:
