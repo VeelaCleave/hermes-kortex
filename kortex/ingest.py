@@ -15,9 +15,10 @@ import logging
 import math
 import re
 import threading
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from .db import KortexDB
+from .extract_llm import extract_structured_memory
 from .linker import Linker
 from .models import Episode, Fact, OpenLoop
 from .time_utils import now_epoch
@@ -208,6 +209,14 @@ class Ingestor:
         self._linker = Linker(db)
         self._lock = threading.Lock()
         self._turn_counter: dict[str, int] = {}
+        self._auxiliary_client: Any = None
+        self._extraction_mode: str = "heuristic"
+
+    def configure_extraction(
+        self, mode: str = "heuristic", auxiliary_client: Any = None
+    ) -> None:
+        self._extraction_mode = mode or "heuristic"
+        self._auxiliary_client = auxiliary_client
 
     def ingest_turn(
         self,
@@ -237,11 +246,33 @@ class Ingestor:
             ep.arousal = self._score_arousal(combined)
             ep.topics = self._extract_topics(combined)
             ep.entities = self._extract_entities(combined)
+            structured = self._extract_structured_memory(user_text, assistant_text)
+            if structured:
+                if structured.get("summary"):
+                    ep.summary = structured["summary"]
+                if structured.get("topics"):
+                    ep.topics = ",".join(structured["topics"][:5])
+                if structured.get("entities"):
+                    ep.entities = ",".join(structured["entities"][:5])
 
         ep.id = self._db.insert_episode(ep)
         return ep
 
     def extract_open_loops(self, user_text: str, episode_id: int) -> List[OpenLoop]:
+        structured = self._extract_structured_memory(user_text, "")
+        if structured and structured.get("open_loops"):
+            loops = []
+            for item in structured["open_loops"]:
+                loop = OpenLoop(
+                    kind=item.get("kind", "question"),
+                    text=item.get("text", "")[:300],
+                    source_episode_id=episode_id,
+                )
+                loop.id = self._db.insert_open_loop(loop)
+                loops.append(loop)
+            if loops:
+                return loops
+
         loops = []
         for pattern in _COMMITMENT_PATTERNS:
             match = pattern.search(user_text)
@@ -273,7 +304,18 @@ class Ingestor:
 
     def extract_facts(self, user_text: str, episode_id: int) -> List[Fact]:
         """Extract durable facts from user text and deduplicate against existing facts."""
+        structured = self._extract_structured_memory(user_text, "")
         candidates = self._extract_fact_candidates(user_text)
+        if structured and structured.get("facts"):
+            merged = candidates + structured["facts"]
+            candidates = []
+            seen = set()
+            for predicate, object_text in merged:
+                key = (predicate.lower(), object_text.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append((predicate, object_text))
         results = []
 
         for predicate, object_text in candidates:
@@ -442,6 +484,22 @@ class Ingestor:
                 candidates.append((predicate, match.group(1)))
 
         return candidates
+
+    def _extract_structured_memory(
+        self, user_text: str, assistant_text: str
+    ) -> Optional[dict]:
+        if self._extraction_mode == "heuristic":
+            return None
+        structured = extract_structured_memory(
+            user_text,
+            assistant_text,
+            auxiliary_client=self._auxiliary_client,
+        )
+        if structured:
+            return structured
+        if self._extraction_mode == "llm":
+            return None
+        return None
 
     @staticmethod
     def _build_loop_resolution(assistant_text: str, loop_keywords: set[str]) -> str:

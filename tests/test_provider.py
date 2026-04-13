@@ -30,6 +30,18 @@ class TestProviderLifecycle:
         assert "KORTEX" in block
         assert "kortex_search" in block
 
+    def test_initialize_passes_auxiliary_client_to_ingestor(self, tmp_path):
+        class FakeAux:
+            pass
+
+        config = KortexConfig(db_path=str(tmp_path / "test.db"), extraction_mode="llm")
+        p = KortexProvider(config=config)
+        aux = FakeAux()
+        p.initialize("test-session", hermes_home=str(tmp_path), auxiliary_client=aux)
+        assert p._ingestor._auxiliary_client is aux
+        assert p._ingestor._extraction_mode == "llm"
+        p.shutdown()
+
 
 class TestProviderSyncTurn:
     def test_sync_turn_ingests(self, tmp_path):

@@ -169,6 +169,10 @@ class KortexProvider(MemoryProvider):
 
         self._db = KortexDB(db_path)
         self._ingestor = Ingestor(self._db)
+        self._ingestor.configure_extraction(
+            mode=self._config.extraction_mode,
+            auxiliary_client=kwargs.get("auxiliary_client"),
+        )
         self._linker = Linker(self._db)
         self._recall = Recall(self._db, self._config)
         self._promoter = Promoter(self._db, soul_path=self._config.soul_path)

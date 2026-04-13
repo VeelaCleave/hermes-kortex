@@ -1,6 +1,17 @@
 from kortex.ingest import Ingestor
 
 
+class _FakeAuxiliaryClient:
+    def extract_structured(self, prompt):
+        return {
+            "summary": "LLM-enriched summary",
+            "topics": ["infra", "release"],
+            "entities": ["Kubernetes"],
+            "facts": [{"predicate": "uses", "object_text": "Kubernetes"}],
+            "open_loops": [{"kind": "question", "text": "Need rollback plan"}],
+        }
+
+
 class TestIngestTurn:
     def test_basic_ingest(self, ingestor, kortex_db):
         ep = ingestor.ingest_turn(
@@ -30,6 +41,14 @@ class TestIngestTurn:
         ep = ingestor.ingest_turn(long_text, long_text, session_id="s1")
         assert len(ep.user_text) <= 4000
         assert len(ep.assistant_text) <= 4000
+
+    def test_llm_mode_enriches_episode(self, kortex_db):
+        ingestor = Ingestor(kortex_db)
+        ingestor.configure_extraction("llm", _FakeAuxiliaryClient())
+        ep = ingestor.ingest_turn("We use Kubernetes", "Got it", session_id="s1")
+        assert ep.summary == "LLM-enriched summary"
+        assert "infra" in ep.topics
+        assert "Kubernetes" in ep.entities
 
 
 class TestSalienceScoring:
@@ -125,3 +144,19 @@ class TestOpenLoopExtraction:
         ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
         loops = ingestor.extract_open_loops("The sky is blue.", ep.id)
         assert len(loops) == 0
+
+    def test_llm_loop_fallback(self, kortex_db):
+        ingestor = Ingestor(kortex_db)
+        ingestor.configure_extraction("hybrid", _FakeAuxiliaryClient())
+        ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
+        loops = ingestor.extract_open_loops("Can you help?", ep.id)
+        assert loops[0].text == "Need rollback plan"
+
+
+class TestFactExtractionLLM:
+    def test_hybrid_mode_merges_structured_facts(self, kortex_db):
+        ingestor = Ingestor(kortex_db)
+        ingestor.configure_extraction("hybrid", _FakeAuxiliaryClient())
+        ep = ingestor.ingest_turn("We use Kubernetes", "Okay", session_id="s1")
+        facts = ingestor.extract_facts("We use Kubernetes", ep.id)
+        assert any(f.object_text == "Kubernetes" for f in facts)
