@@ -341,6 +341,36 @@ class TestProviderOnMemoryWrite:
         assert "dark theme" in facts[0].object_text
         p.shutdown()
 
+    def test_scopes_memory_to_user_id(self, tmp_path):
+        config = KortexConfig(db_path=str(tmp_path / "test.db"), search_format="json")
+        p_alice = KortexProvider(config=config)
+        p_alice.initialize("session-a", hermes_home=str(tmp_path), user_id="alice")
+        p_alice.sync_turn("I use Neovim", "Got it")
+        time.sleep(0.5)
+        p_alice.on_memory_write("add", "user", "Prefers dark theme")
+
+        p_bob = KortexProvider(config=config)
+        p_bob.initialize("session-b", hermes_home=str(tmp_path), user_id="bob")
+
+        status_bob = json.loads(
+            p_bob.handle_tool_call("kortex_search", {"action": "status"})
+        )
+        facts_bob = json.loads(
+            p_bob.handle_tool_call("kortex_search", {"action": "list_facts"})
+        )
+        search_bob = json.loads(
+            p_bob.handle_tool_call(
+                "kortex_search", {"action": "search", "query": "Neovim"}
+            )
+        )
+
+        assert status_bob["total_episodes"] == 0
+        assert facts_bob["facts"] == []
+        assert search_bob["episodes"] == []
+
+        p_alice.shutdown()
+        p_bob.shutdown()
+
 
 class TestProviderSessionEnd:
     def test_on_session_end_creates_conversation_summary(self, tmp_path):

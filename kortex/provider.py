@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from .config import KortexConfig, load_kortex_config
 from .calibrate import calibrate_affect, update_baseline
 from .consolidate import Consolidator
-from .db import KortexDB
+from .db import DEFAULT_USER_ID, KortexDB
 from .affect import score_affect
 from .ingest import Ingestor
 from .linker import Linker
@@ -151,6 +151,7 @@ class KortexProvider(MemoryProvider):
         self._prefetch_cache: str = ""
         self._prefetch_lock = threading.Lock()
         self._agent_context: str = "primary"
+        self._user_id: str = DEFAULT_USER_ID
 
     @property
     def name(self) -> str:
@@ -163,6 +164,7 @@ class KortexProvider(MemoryProvider):
         self._session_id = session_id
         self._hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
         self._agent_context = kwargs.get("agent_context", "primary")
+        self._user_id = kwargs.get("user_id", DEFAULT_USER_ID)
 
         db_path = self._config.db_path
         if not db_path:
@@ -198,7 +200,7 @@ class KortexProvider(MemoryProvider):
                 return cached
 
         return self._recall.build_context(
-            query, session_id=session_id or self._session_id
+            query, session_id=session_id or self._session_id, user_id=self._user_id
         )
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
@@ -208,7 +210,9 @@ class KortexProvider(MemoryProvider):
         def _bg():
             try:
                 ctx = self._recall.build_context(
-                    query, session_id=session_id or self._session_id
+                    query,
+                    session_id=session_id or self._session_id,
+                    user_id=self._user_id,
                 )
                 with self._prefetch_lock:
                     self._prefetch_cache = ctx
@@ -230,31 +234,45 @@ class KortexProvider(MemoryProvider):
         def _bg():
             try:
                 ep = self._ingestor.ingest_turn(
-                    user_content, assistant_content, session_id=sid
+                    user_content,
+                    assistant_content,
+                    session_id=sid,
+                    user_id=self._user_id,
                 )
 
                 facts = []
                 reflections = []
 
                 if self._config.auto_extract:
-                    self._ingestor.extract_open_loops(user_content, ep.id)
-                    facts = self._ingestor.extract_facts(user_content, ep.id)
+                    self._ingestor.extract_open_loops(
+                        user_content, ep.id, user_id=self._user_id
+                    )
+                    facts = self._ingestor.extract_facts(
+                        user_content, ep.id, user_id=self._user_id
+                    )
                     resolved_loops = self._ingestor.resolve_answered_loops(
-                        assistant_content, resolving_episode_id=ep.id
+                        assistant_content,
+                        resolving_episode_id=ep.id,
+                        user_id=self._user_id,
                     )
                     resolved_loops.extend(
                         self._ingestor.resolve_completed_commitments(
-                            assistant_content, resolving_episode_id=ep.id
+                            assistant_content,
+                            resolving_episode_id=ep.id,
+                            user_id=self._user_id,
                         )
                     )
                 else:
                     resolved_loops = []
 
                 affect = score_affect(user_content, assistant_content)
-                baseline = self._db.get_affect_baseline()
+                baseline = self._db.get_affect_baseline(user_id=self._user_id)
                 if affect.is_significant:
-                    self._db.insert_emotion_log(affect, ep.id, session_id=sid)
+                    self._db.insert_emotion_log(
+                        affect, ep.id, session_id=sid, user_id=self._user_id
+                    )
                 updated_baseline = update_baseline(baseline, affect)
+                updated_baseline.user_id = self._user_id
                 self._db.upsert_affect_baseline(updated_baseline)
                 calibrated_affect = calibrate_affect(
                     affect,
@@ -262,11 +280,12 @@ class KortexProvider(MemoryProvider):
                     minimum_samples=self._config.affect_calibration_min_samples,
                 )
 
-                rel = self._db.get_relationship()
+                rel = self._db.get_relationship(user_id=self._user_id)
                 days_since = 0.0
                 if rel.total_turns > 0:
                     days_since = max(ep.timestamp - rel.last_updated, 0.0) / 86400
                 updated_rel = update_relationship(calibrated_affect, rel, days_since)
+                updated_rel.user_id = self._user_id
                 self._db.upsert_relationship(updated_rel)
 
                 if self._config.auto_extract:
@@ -276,24 +295,29 @@ class KortexProvider(MemoryProvider):
                         assistant_content,
                         calibrated_affect,
                         ep.id,
+                        user_id=self._user_id,
                     )
 
                 if self._linker:
                     self._linker.link_episode_to_facts(
-                        ep.id, [fact.id for fact in facts if fact.id is not None]
+                        ep.id,
+                        [fact.id for fact in facts if fact.id is not None],
+                        user_id=self._user_id,
                     )
                     self._linker.link_episode_to_reflections(
                         ep.id,
                         [ref.id for ref in reflections if ref.id is not None],
+                        user_id=self._user_id,
                     )
                     self._linker.link_episode_to_loops(
                         ep.id,
                         [loop.id for loop in resolved_loops if loop.id is not None],
+                        user_id=self._user_id,
                     )
-                    self._linker.link_related_episodes(ep)
+                    self._linker.link_related_episodes(ep, user_id=self._user_id)
 
                 if self._consolidator:
-                    self._consolidator.maybe_consolidate()
+                    self._consolidator.maybe_consolidate(user_id=self._user_id)
 
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
@@ -352,13 +376,16 @@ class KortexProvider(MemoryProvider):
         if not self._db:
             return
         try:
-            episodes = self._db.get_episodes_for_session(self._session_id)
+            episodes = self._db.get_episodes_for_session(
+                self._session_id, user_id=self._user_id
+            )
             summary = build_conversation_summary(
                 self._session_id,
                 episodes,
                 messages=messages,
             )
             if summary:
+                summary["user_id"] = self._user_id
                 self._db.insert_conversation_summary(summary)
         except Exception:
             logger.exception("KORTEX session summary generation failed")
@@ -376,6 +403,7 @@ class KortexProvider(MemoryProvider):
 
         if target == "user" and action == "add":
             fact = Fact(
+                user_id=self._user_id,
                 subject_type="user",
                 predicate="hermes_memory",
                 object_text=content[:500],
@@ -418,9 +446,11 @@ class KortexProvider(MemoryProvider):
         if not query:
             return json.dumps({"error": "query required for search"})
 
-        episodes = self._db.search_episodes(query, limit=limit)
-        facts = self._db.search_facts(query, limit=limit)
-        reflections = self._db.search_reflections(query, limit=limit)
+        episodes = self._db.search_episodes(query, limit=limit, user_id=self._user_id)
+        facts = self._db.search_facts(query, limit=limit, user_id=self._user_id)
+        reflections = self._db.search_reflections(
+            query, limit=limit, user_id=self._user_id
+        )
 
         results = {
             "episodes": [
@@ -556,7 +586,7 @@ class KortexProvider(MemoryProvider):
         )
 
     def _handle_list_facts(self, limit: int) -> str:
-        facts = self._db.get_active_facts(limit=limit)
+        facts = self._db.get_active_facts(limit=limit, user_id=self._user_id)
         return json.dumps(
             {
                 "facts": [
@@ -573,7 +603,7 @@ class KortexProvider(MemoryProvider):
         )
 
     def _handle_list_loops(self, limit: int) -> str:
-        loops = self._db.get_open_loops(limit=limit)
+        loops = self._db.get_open_loops(limit=limit, user_id=self._user_id)
         return json.dumps(
             {
                 "loops": [
@@ -589,7 +619,9 @@ class KortexProvider(MemoryProvider):
         )
 
     def _handle_list_conversations(self, limit: int) -> str:
-        summaries = self._db.list_conversation_summaries(limit=limit)
+        summaries = self._db.list_conversation_summaries(
+            limit=limit, user_id=self._user_id
+        )
         return json.dumps(
             {
                 "conversations": [
@@ -607,14 +639,16 @@ class KortexProvider(MemoryProvider):
         )
 
     def _handle_status(self) -> str:
-        total_episodes = self._db.count_episodes()
-        unconsolidated_raw_episodes = self._db.count_unconsolidated_episodes()
-        facts = self._db.get_active_facts(limit=1000)
-        loops = self._db.get_open_loops(limit=1000)
-        reflections = self._db.get_reflections(limit=1000)
-        rel = self._db.get_relationship()
-        recent_emotions = self._db.get_recent_emotions(limit=5)
-        baseline = self._db.get_affect_baseline()
+        total_episodes = self._db.count_episodes(user_id=self._user_id)
+        unconsolidated_raw_episodes = self._db.count_unconsolidated_episodes(
+            user_id=self._user_id
+        )
+        facts = self._db.get_active_facts(limit=1000, user_id=self._user_id)
+        loops = self._db.get_open_loops(limit=1000, user_id=self._user_id)
+        reflections = self._db.get_reflections(limit=1000, user_id=self._user_id)
+        rel = self._db.get_relationship(user_id=self._user_id)
+        recent_emotions = self._db.get_recent_emotions(limit=5, user_id=self._user_id)
+        baseline = self._db.get_affect_baseline(user_id=self._user_id)
 
         return json.dumps(
             {
