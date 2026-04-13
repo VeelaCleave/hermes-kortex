@@ -414,12 +414,92 @@ class KortexDB:
                 (confidence, now, fact_id),
             )
 
+    def bump_fact_last_seen(self, fact_id: int) -> None:
+        """Update last_seen without changing confidence."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE facts SET last_seen=? WHERE id=?",
+                (now, fact_id),
+            )
+
     def supersede_fact(self, old_id: int, new_id: int) -> None:
         with self._tx() as conn:
             conn.execute(
                 "UPDATE facts SET status='superseded', superseded_by=? WHERE id=?",
                 (new_id, old_id),
             )
+
+    def get_facts_by_predicate(
+        self, predicate: str, status: str = "active", limit: int = 20
+    ) -> List[Fact]:
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM facts WHERE predicate=? AND status=? ORDER BY confidence DESC LIMIT ?",
+                (predicate, status, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_fact(r) for r in rows]
+
+    def find_similar_facts(
+        self, text: str, predicate: Optional[str] = None, limit: int = 5
+    ) -> List[Fact]:
+        """Find active facts with similar object_text via FTS."""
+        if not text.strip():
+            return []
+        try:
+            if predicate:
+                rows = (
+                    self._get_conn()
+                    .execute(
+                        """SELECT f.* FROM facts f
+                        JOIN facts_fts fts ON f.id = fts.rowid
+                        WHERE facts_fts MATCH ? AND f.status='active' AND f.predicate=?
+                        ORDER BY rank LIMIT ?""",
+                        (text, predicate, limit),
+                    )
+                    .fetchall()
+                )
+            else:
+                rows = (
+                    self._get_conn()
+                    .execute(
+                        """SELECT f.* FROM facts f
+                        JOIN facts_fts fts ON f.id = fts.rowid
+                        WHERE facts_fts MATCH ? AND f.status='active'
+                        ORDER BY rank LIMIT ?""",
+                        (text, limit),
+                    )
+                    .fetchall()
+                )
+            return [self._row_to_fact(r) for r in rows]
+        except sqlite3.OperationalError:
+            # FTS query syntax error — fall back to empty
+            return []
+
+    def count_facts(self, status: str = "active") -> int:
+        return (
+            self._get_conn()
+            .execute("SELECT COUNT(*) FROM facts WHERE status=?", (status,))
+            .fetchone()[0]
+        )
+
+    def decay_stale_facts(
+        self, days_threshold: float = 60.0, decay_rate: float = 0.05
+    ) -> int:
+        """Reduce confidence of facts not seen recently. Returns count of decayed facts."""
+        cutoff = datetime.now(timezone.utc).timestamp() - (days_threshold * 86400)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """UPDATE facts
+                   SET confidence = MAX(0.1, confidence - ?)
+                   WHERE status='active' AND last_seen < ? AND confidence > 0.1""",
+                (decay_rate, cutoff_iso),
+            )
+            return cur.rowcount
 
     # -- Open Loops ----------------------------------------------------------
 
@@ -459,6 +539,36 @@ class KortexDB:
                 "UPDATE open_loops SET status='resolved', resolved_at=? WHERE id=?",
                 (now, loop_id),
             )
+
+    def expire_old_loops(self, days_threshold: float = 14.0) -> int:
+        """Mark open loops older than threshold as expired. Returns count."""
+        cutoff = datetime.now(timezone.utc).timestamp() - (days_threshold * 86400)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE open_loops SET status='expired' WHERE status='open' AND created_at < ?",
+                (cutoff_iso,),
+            )
+            return cur.rowcount
+
+    def count_open_loops(self) -> int:
+        return (
+            self._get_conn()
+            .execute("SELECT COUNT(*) FROM open_loops WHERE status='open'")
+            .fetchone()[0]
+        )
+
+    def search_open_loops(self, text: str, limit: int = 5) -> List[OpenLoop]:
+        """Simple LIKE search on open loop text (no FTS table for loops)."""
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM open_loops WHERE status='open' AND text LIKE ? LIMIT ?",
+                (f"%{text}%", limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_open_loop(r) for r in rows]
 
     # -- Reflections ---------------------------------------------------------
 

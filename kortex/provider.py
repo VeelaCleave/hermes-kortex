@@ -171,6 +171,9 @@ class KortexProvider(MemoryProvider):
 
                 if self._config.auto_extract:
                     self._ingestor.extract_open_loops(user_content, ep.id)
+                    self._ingestor.extract_facts(user_content, ep.id)
+                    self._ingestor.resolve_answered_loops(assistant_content)
+                    self._ingestor.resolve_completed_commitments(assistant_content)
 
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d)",
