@@ -10,12 +10,17 @@ Install: pip install hermes-kortex
 from __future__ import annotations
 
 from .config import load_kortex_config
+from .context_engine import KortexContextEngine
 from .provider import KortexProvider
 
 
 def register(ctx) -> None:
     config = load_kortex_config()
     provider = KortexProvider(config=config)
+    if getattr(config, "context_engine_enabled", True) and hasattr(
+        ctx, "register_context_engine"
+    ):
+        ctx.register_context_engine(KortexContextEngine())
     if hasattr(ctx, "register_memory_provider"):
         ctx.register_memory_provider(provider)
     else:

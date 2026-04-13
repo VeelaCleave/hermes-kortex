@@ -218,14 +218,16 @@ class KortexProvider(MemoryProvider):
         logger.info("KORTEX initialized (session=%s, db=%s)", session_id, db_path)
 
     def system_prompt_block(self) -> str:
+        if not self._config.passive_context_hint:
+            return ""
         return (
-            "You have KORTEX experiential memory active. You remember past conversations, "
-            "emotional moments, user preferences, and commitments across sessions. "
-            "Use the kortex_search tool to actively recall specific memories when relevant."
+            "You have KORTEX experiential memory active. Relevant memory context is "
+            "usually injected automatically before each turn. Use KORTEX tools only "
+            "when you need to inspect, expand, or export memory beyond the passive context."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if not self._recall:
+        if not self._recall or not self._config.passive_recall:
             return ""
         with self._prefetch_lock:
             if self._prefetch_cache:
@@ -238,7 +240,7 @@ class KortexProvider(MemoryProvider):
         )
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        if not self._recall:
+        if not self._recall or not self._config.passive_recall:
             return
 
         def _bg():

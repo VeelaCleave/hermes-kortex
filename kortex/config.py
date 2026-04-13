@@ -65,6 +65,12 @@ class KortexConfig:
     # Total hard cap
     total_budget: int = 1800
 
+    # Passive recall / context-engine integration
+    passive_recall: bool = True
+    prefer_passive_recall: bool = True
+    context_engine_enabled: bool = True
+    passive_context_hint: bool = True
+
     # Extraction
     auto_extract: bool = True  # extract facts/loops from turns automatically
     affect_calibration_min_samples: int = 20
@@ -111,6 +117,10 @@ class KortexConfig:
             ),
             budget=merged_budget,
             total_budget=data.get("total_budget", 1800),
+            passive_recall=data.get("passive_recall", True),
+            prefer_passive_recall=data.get("prefer_passive_recall", True),
+            context_engine_enabled=data.get("context_engine_enabled", True),
+            passive_context_hint=data.get("passive_context_hint", True),
             auto_extract=data.get("auto_extract", True),
             affect_calibration_min_samples=data.get(
                 "affect_calibration_min_samples", 20

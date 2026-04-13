@@ -28,7 +28,11 @@ class TestProviderLifecycle:
         p = KortexProvider()
         block = p.system_prompt_block()
         assert "KORTEX" in block
-        assert "kortex_search" in block
+        assert "injected automatically" in block
+
+    def test_system_prompt_block_can_be_disabled(self):
+        p = KortexProvider(config=KortexConfig(passive_context_hint=False))
+        assert p.system_prompt_block() == ""
 
     def test_initialize_passes_auxiliary_client_to_ingestor(self, tmp_path):
         class FakeAux:
@@ -88,6 +92,13 @@ class TestProviderPrefetch:
 
         ctx = p.prefetch("testing")
         assert "KORTEX" in ctx or ctx == ""
+        p.shutdown()
+
+    def test_prefetch_can_be_disabled(self, tmp_path):
+        config = KortexConfig(db_path=str(tmp_path / "test.db"), passive_recall=False)
+        p = KortexProvider(config=config)
+        p.initialize("test-session", hermes_home=str(tmp_path))
+        assert p.prefetch("testing") == ""
         p.shutdown()
 
     def test_prefetch_temporal_query_uses_human_readable_anchor(self, tmp_path):
