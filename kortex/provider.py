@@ -22,6 +22,7 @@ from .promote import Promoter
 from .recall import Recall
 from .reflect import process_reflections
 from .relationship import update_relationship
+from .summaries import build_conversation_summary
 from .time_utils import epoch_to_iso
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ KORTEX_SEARCH_SCHEMA = {
         "- recall_episode: Get details of a specific episode by ID\n"
         "- list_facts: List known durable facts\n"
         "- list_loops: List open commitments/threads\n"
+        "- list_conversations: List stored whole-conversation summaries\n"
         "- status: Show memory statistics"
     ),
     "parameters": {
@@ -49,6 +51,7 @@ KORTEX_SEARCH_SCHEMA = {
                     "recall_episode",
                     "list_facts",
                     "list_loops",
+                    "list_conversations",
                     "status",
                 ],
             },
@@ -290,6 +293,8 @@ class KortexProvider(MemoryProvider):
                     return self._handle_list_facts(limit)
                 elif action == "list_loops":
                     return self._handle_list_loops(limit)
+                elif action == "list_conversations":
+                    return self._handle_list_conversations(limit)
                 elif action == "status":
                     return self._handle_status()
                 else:
@@ -306,6 +311,17 @@ class KortexProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         if not self._db:
             return
+        try:
+            episodes = self._db.get_episodes_for_session(self._session_id)
+            summary = build_conversation_summary(
+                self._session_id,
+                episodes,
+                messages=messages,
+            )
+            if summary:
+                self._db.insert_conversation_summary(summary)
+        except Exception:
+            logger.exception("KORTEX session summary generation failed")
         logger.info("KORTEX session ended with %d messages", len(messages))
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
@@ -434,6 +450,24 @@ class KortexProvider(MemoryProvider):
                         "created": epoch_to_iso(l.created_at),
                     }
                     for l in loops
+                ]
+            }
+        )
+
+    def _handle_list_conversations(self, limit: int) -> str:
+        summaries = self._db.list_conversation_summaries(limit=limit)
+        return json.dumps(
+            {
+                "conversations": [
+                    {
+                        "id": summary["id"],
+                        "session_id": summary["session_id"],
+                        "summary_text": summary["summary_text"],
+                        "episode_count": summary["episode_count"],
+                        "key_entities": summary["key_entities"],
+                        "updated_at": epoch_to_iso(summary["updated_at"]),
+                    }
+                    for summary in summaries
                 ]
             }
         )

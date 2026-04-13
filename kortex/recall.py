@@ -34,6 +34,14 @@ class Recall:
         budget_used = 0
         selected_facts = self._select_facts(query)
 
+        summaries_budget = self._config.budget.get("conversation_summaries", 250)
+        summaries_text = self._build_conversation_summaries_section(
+            query, session_id, summaries_budget
+        )
+        if summaries_text:
+            sections.append(summaries_text)
+            budget_used += self._estimate_tokens(summaries_text)
+
         relationship = self._db.get_relationship()
         rel_text = relationship.to_compact_text()
         emotional_trajectory = self._build_emotional_trajectory(session_id)
@@ -83,6 +91,28 @@ class Recall:
             full = self._trim_to_budget(full, self._config.total_budget)
 
         return full
+
+    def _build_conversation_summaries_section(
+        self, query: str, session_id: str, budget: int
+    ) -> str:
+        if query:
+            summaries = self._db.search_conversation_summaries(
+                query, limit=self._config.max_conversation_summaries_per_recall
+            )
+        else:
+            summaries = self._db.list_conversation_summaries(
+                limit=self._config.max_conversation_summaries_per_recall,
+                session_id=session_id or None,
+            )
+
+        if not summaries:
+            return ""
+
+        lines = ["Conversation summaries:"]
+        for summary in summaries[: self._config.max_conversation_summaries_per_recall]:
+            lines.append(f"- {summary['summary_text']}")
+
+        return self._trim_to_budget("\n".join(lines), budget)
 
     def _select_facts(self, query: str) -> List[Fact]:
         facts: List[Fact] = []

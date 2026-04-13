@@ -36,5 +36,8 @@ def register(ctx) -> None:
         )
         ctx.register_hook(
             "on_session_end",
-            lambda **kw: provider.shutdown(),
+            lambda **kw: (
+                provider.on_session_end(kw.get("messages", [])),
+                provider.shutdown(),
+            ),
         )

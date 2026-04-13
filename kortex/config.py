@@ -13,8 +13,9 @@ from typing import Any, Dict, Optional
 # Budget allocation for context injection (~2000 tokens total)
 DEFAULT_BUDGET = {
     "relationship_state": 200,  # 150-250 tokens
+    "conversation_summaries": 100,
     "stable_facts": 350,  # 300-400 tokens
-    "episodic_memories": 700,  # 600-800 tokens
+    "episodic_memories": 600,  # 600-800 tokens
     "open_loops": 200,  # 150-250 tokens
     "reflections": 200,  # 150-250 tokens
     "reserve": 150,  # 100-200 tokens
@@ -30,6 +31,7 @@ class KortexConfig:
 
     # Episodic memory
     max_episodes_per_recall: int = 4
+    max_conversation_summaries_per_recall: int = 2
     salience_threshold: float = 0.2
     recency_decay_days: float = 30.0  # half-life in days for recency scoring
 
@@ -67,6 +69,9 @@ class KortexConfig:
         return cls(
             db_path=data.get("db_path"),
             max_episodes_per_recall=data.get("max_episodes_per_recall", 4),
+            max_conversation_summaries_per_recall=data.get(
+                "max_conversation_summaries_per_recall", 2
+            ),
             salience_threshold=data.get("salience_threshold", 0.2),
             recency_decay_days=data.get("recency_decay_days", 30.0),
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
