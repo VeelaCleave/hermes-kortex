@@ -58,6 +58,7 @@ class KortexConfig:
 
     # Extraction
     auto_extract: bool = True  # extract facts/loops from turns automatically
+    affect_calibration_min_samples: int = 20
 
     # Identity
     soul_path: Optional[str] = None  # custom SOUL.md path (None = hermes default)
@@ -92,6 +93,9 @@ class KortexConfig:
             budget=merged_budget,
             total_budget=data.get("total_budget", 1800),
             auto_extract=data.get("auto_extract", True),
+            affect_calibration_min_samples=data.get(
+                "affect_calibration_min_samples", 20
+            ),
             soul_path=data.get("soul_path"),
         )
 

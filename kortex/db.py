@@ -23,6 +23,7 @@ from .models import (
     Reflection,
     RelationshipState,
 )
+from .calibrate import AffectBaseline
 from .time_utils import now_epoch, parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -1727,6 +1728,68 @@ class KortexDB:
             }
             for r in rows
         ]
+
+    def get_affect_baseline(self, user_id: str = DEFAULT_USER_ID) -> AffectBaseline:
+        row = (
+            self._get_conn()
+            .execute("SELECT * FROM affect_baselines WHERE user_id=?", (user_id,))
+            .fetchone()
+        )
+        if not row:
+            return AffectBaseline(user_id=user_id)
+        return AffectBaseline(
+            user_id=row["user_id"],
+            baseline_frustration=row["baseline_frustration"],
+            baseline_warmth=row["baseline_warmth"],
+            baseline_humor=row["baseline_humor"],
+            baseline_hostility=row["baseline_hostility"],
+            baseline_gratitude=row["baseline_gratitude"],
+            baseline_anxiety=row["baseline_anxiety"],
+            baseline_excitement=row["baseline_excitement"],
+            baseline_trust_signal=row["baseline_trust_signal"],
+            sample_count=row["sample_count"],
+            ema_alpha=row["ema_alpha"],
+            created_at=_as_epoch(row["created_at"]) or 0.0,
+            updated_at=_as_epoch(row["updated_at"]) or 0.0,
+        )
+
+    def upsert_affect_baseline(self, baseline: AffectBaseline) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                """INSERT INTO affect_baselines
+                   (user_id, baseline_frustration, baseline_warmth, baseline_humor,
+                    baseline_hostility, baseline_gratitude, baseline_anxiety,
+                    baseline_excitement, baseline_trust_signal, sample_count,
+                    ema_alpha, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                    baseline_frustration=excluded.baseline_frustration,
+                    baseline_warmth=excluded.baseline_warmth,
+                    baseline_humor=excluded.baseline_humor,
+                    baseline_hostility=excluded.baseline_hostility,
+                    baseline_gratitude=excluded.baseline_gratitude,
+                    baseline_anxiety=excluded.baseline_anxiety,
+                    baseline_excitement=excluded.baseline_excitement,
+                    baseline_trust_signal=excluded.baseline_trust_signal,
+                    sample_count=excluded.sample_count,
+                    ema_alpha=excluded.ema_alpha,
+                    updated_at=excluded.updated_at""",
+                (
+                    baseline.user_id,
+                    baseline.baseline_frustration,
+                    baseline.baseline_warmth,
+                    baseline.baseline_humor,
+                    baseline.baseline_hostility,
+                    baseline.baseline_gratitude,
+                    baseline.baseline_anxiety,
+                    baseline.baseline_excitement,
+                    baseline.baseline_trust_signal,
+                    baseline.sample_count,
+                    baseline.ema_alpha,
+                    baseline.created_at,
+                    baseline.updated_at,
+                ),
+            )
 
     # -- Row mappers ---------------------------------------------------------
 

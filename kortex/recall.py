@@ -14,6 +14,7 @@ import re
 from typing import List, Optional, Set
 
 from .config import KortexConfig
+from .calibrate import calibrate_affect
 from .db import KortexDB
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
 from .time_utils import epoch_to_display, now_epoch
@@ -299,13 +300,50 @@ class Recall:
         if not trajectory:
             return ""
 
+        baseline = self._db.get_affect_baseline()
+        calibrated_trajectory = [
+            {
+                "timestamp": entry["timestamp"],
+                "emotion": calibrate_affect(
+                    AffectSignal(
+                        valence=entry["valence"],
+                        arousal=entry["arousal"],
+                        dominant_emotion=entry["emotion"],
+                    ),
+                    baseline,
+                    minimum_samples=self._config.affect_calibration_min_samples,
+                ).dominant_emotion,
+                "valence": calibrate_affect(
+                    AffectSignal(
+                        valence=entry["valence"],
+                        arousal=entry["arousal"],
+                        dominant_emotion=entry["emotion"],
+                    ),
+                    baseline,
+                    minimum_samples=self._config.affect_calibration_min_samples,
+                ).valence,
+                "arousal": calibrate_affect(
+                    AffectSignal(
+                        valence=entry["valence"],
+                        arousal=entry["arousal"],
+                        dominant_emotion=entry["emotion"],
+                    ),
+                    baseline,
+                    minimum_samples=self._config.affect_calibration_min_samples,
+                ).arousal,
+            }
+            for entry in trajectory
+        ]
+
         recent_emotions = [
-            entry["emotion"] for entry in trajectory if entry["emotion"] != "neutral"
+            entry["emotion"]
+            for entry in calibrated_trajectory
+            if entry["emotion"] != "neutral"
         ]
         if not recent_emotions:
             return ""
 
-        recent_valences = [entry["valence"] for entry in trajectory]
+        recent_valences = [entry["valence"] for entry in calibrated_trajectory]
         avg_valence = sum(recent_valences) / len(recent_valences)
 
         trend = "neutral"

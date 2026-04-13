@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import KortexConfig, load_kortex_config
+from .calibrate import calibrate_affect, update_baseline
 from .consolidate import Consolidator
 from .db import KortexDB
 from .affect import score_affect
@@ -245,19 +246,31 @@ class KortexProvider(MemoryProvider):
                     resolved_loops = []
 
                 affect = score_affect(user_content, assistant_content)
+                baseline = self._db.get_affect_baseline()
                 if affect.is_significant:
                     self._db.insert_emotion_log(affect, ep.id, session_id=sid)
+                updated_baseline = update_baseline(baseline, affect)
+                self._db.upsert_affect_baseline(updated_baseline)
+                calibrated_affect = calibrate_affect(
+                    affect,
+                    updated_baseline,
+                    minimum_samples=self._config.affect_calibration_min_samples,
+                )
 
                 rel = self._db.get_relationship()
                 days_since = 0.0
                 if rel.total_turns > 0:
                     days_since = max(ep.timestamp - rel.last_updated, 0.0) / 86400
-                updated_rel = update_relationship(affect, rel, days_since)
+                updated_rel = update_relationship(calibrated_affect, rel, days_since)
                 self._db.upsert_relationship(updated_rel)
 
                 if self._config.auto_extract:
                     reflections = process_reflections(
-                        self._db, user_content, assistant_content, affect, ep.id
+                        self._db,
+                        user_content,
+                        assistant_content,
+                        calibrated_affect,
+                        ep.id,
                     )
 
                 if self._linker:
@@ -282,7 +295,7 @@ class KortexProvider(MemoryProvider):
                     ep.turn_index,
                     ep.salience,
                     ep.valence,
-                    affect.dominant_emotion,
+                    calibrated_affect.dominant_emotion,
                 )
             except Exception:
                 logger.exception("KORTEX sync_turn failed")
@@ -502,6 +515,7 @@ class KortexProvider(MemoryProvider):
         reflections = self._db.get_reflections(limit=1000)
         rel = self._db.get_relationship()
         recent_emotions = self._db.get_recent_emotions(limit=5)
+        baseline = self._db.get_affect_baseline()
 
         return json.dumps(
             {
@@ -521,9 +535,21 @@ class KortexProvider(MemoryProvider):
                 },
                 "recent_emotional_state": [
                     {
-                        "emotion": e.dominant_emotion,
-                        "valence": e.valence,
-                        "arousal": e.arousal,
+                        "emotion": calibrate_affect(
+                            e,
+                            baseline,
+                            minimum_samples=self._config.affect_calibration_min_samples,
+                        ).dominant_emotion,
+                        "valence": calibrate_affect(
+                            e,
+                            baseline,
+                            minimum_samples=self._config.affect_calibration_min_samples,
+                        ).valence,
+                        "arousal": calibrate_affect(
+                            e,
+                            baseline,
+                            minimum_samples=self._config.affect_calibration_min_samples,
+                        ).arousal,
                     }
                     for e in recent_emotions[:3]
                 ],

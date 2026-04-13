@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kortex.affect import score_affect, _score_dimension, _detect_sarcasm
+from kortex.calibrate import AffectBaseline, calibrate_affect
 from kortex.models import AffectSignal, RelationshipState
 from kortex.relationship import (
     update_relationship,
@@ -509,6 +510,30 @@ class TestProviderAffectIntegration:
         assert "relationship" in status
         assert "humor" in status["relationship"]
         assert "recent_emotional_state" in status
+
+
+class TestAffectCalibration:
+    def test_db_roundtrip_for_baseline(self, kortex_db):
+        baseline = AffectBaseline(
+            user_id="__default__", baseline_frustration=0.4, sample_count=5
+        )
+        kortex_db.upsert_affect_baseline(baseline)
+        restored = kortex_db.get_affect_baseline()
+        assert restored.baseline_frustration == 0.4
+        assert restored.sample_count == 5
+
+    def test_recall_uses_calibrated_affect(self, kortex_db):
+        baseline = AffectBaseline(
+            baseline_frustration=0.5,
+            sample_count=25,
+        )
+        kortex_db.upsert_affect_baseline(baseline)
+        calibrated = calibrate_affect(
+            AffectSignal(frustration=0.8, dominant_emotion="frustration"),
+            baseline,
+            minimum_samples=20,
+        )
+        assert calibrated.frustration == pytest.approx(0.3, abs=0.01)
 
 
 # ======================================================================== #
