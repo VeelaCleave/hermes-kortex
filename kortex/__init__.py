@@ -16,4 +16,25 @@ from .provider import KortexProvider
 def register(ctx) -> None:
     config = load_kortex_config()
     provider = KortexProvider(config=config)
-    ctx.register_memory_provider(provider)
+    if hasattr(ctx, "register_memory_provider"):
+        ctx.register_memory_provider(provider)
+    else:
+        # Fallback: register tools directly if running as a general plugin
+        # (PluginContext doesn't expose register_memory_provider)
+        for schema in provider.get_tool_schemas():
+            ctx.register_tool(
+                name=schema["name"],
+                toolset="kortex",
+                schema=schema,
+                handler=lambda args, _prov=provider, _name=schema["name"], **kw: (
+                    _prov.handle_tool_call(_name, args, **kw)
+                ),
+            )
+        ctx.register_hook(
+            "on_session_start",
+            lambda **kw: provider.initialize(kw.pop("session_id", ""), **kw),
+        )
+        ctx.register_hook(
+            "on_session_end",
+            lambda **kw: provider.shutdown(),
+        )
