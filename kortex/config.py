@@ -36,6 +36,8 @@ class KortexConfig:
     recency_decay_days: float = 30.0  # half-life in days for recency scoring
     consolidation_threshold: int = 200
     consolidation_batch_size: int = 100
+    same_session_recency_boost: float = 2.0
+    temporal_query_boost: float = 1.4
 
     # Facts
     max_facts_per_recall: int = 6
@@ -78,6 +80,8 @@ class KortexConfig:
             recency_decay_days=data.get("recency_decay_days", 30.0),
             consolidation_threshold=data.get("consolidation_threshold", 200),
             consolidation_batch_size=data.get("consolidation_batch_size", 100),
+            same_session_recency_boost=data.get("same_session_recency_boost", 2.0),
+            temporal_query_boost=data.get("temporal_query_boost", 1.4),
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
             max_loops_per_recall=data.get("max_loops_per_recall", 3),

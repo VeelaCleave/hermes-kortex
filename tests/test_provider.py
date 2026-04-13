@@ -78,6 +78,26 @@ class TestProviderPrefetch:
         assert "KORTEX" in ctx or ctx == ""
         p.shutdown()
 
+    def test_prefetch_temporal_query_uses_human_readable_anchor(self, tmp_path):
+        config = KortexConfig(db_path=str(tmp_path / "test.db"))
+        p = KortexProvider(config=config)
+        p.initialize("test-session", hermes_home=str(tmp_path))
+
+        p._db.insert_episode(
+            __import__("kortex.models", fromlist=["Episode"]).Episode(
+                session_id="test-session",
+                summary="reviewed deployment incident",
+                salience=0.8,
+                timestamp=time.time() - (45 * 86400),
+            )
+        )
+
+        ctx = p.prefetch(
+            "What happened last month with deployment?", session_id="test-session"
+        )
+        assert "UTC" in ctx
+        p.shutdown()
+
     def test_queue_prefetch_caches(self, tmp_path):
         config = KortexConfig(db_path=str(tmp_path / "test.db"))
         p = KortexProvider(config=config)

@@ -117,6 +117,59 @@ class TestEpisodeRanking:
         ctx = recall.build_context("frustration")
         assert "idiot" in ctx
 
+    def test_same_session_memories_get_boost(self, kortex_db, recall):
+        kortex_db.insert_episode(
+            Episode(
+                session_id="other-session",
+                summary="deployment rollback details",
+                salience=0.9,
+                timestamp=time.time() - (2 * 86400),
+            )
+        )
+        kortex_db.insert_episode(
+            Episode(
+                session_id="active-session",
+                summary="deployment rollback details from this session",
+                salience=0.6,
+                timestamp=time.time() - (2 * 86400),
+            )
+        )
+
+        ctx = recall.build_context("deployment rollback", session_id="active-session")
+        memory_lines = [line for line in ctx.split("\n") if line.startswith("- ")]
+        assert "this session" in memory_lines[0].lower()
+
+    def test_temporal_query_prefers_matching_time_window(self, kortex_db, recall):
+        kortex_db.insert_episode(
+            Episode(
+                session_id="s1",
+                summary="deployment issue from yesterday",
+                salience=0.5,
+                timestamp=time.time() - (1 * 86400),
+            )
+        )
+        kortex_db.insert_episode(
+            Episode(
+                session_id="s1",
+                summary="deployment issue from last month",
+                salience=0.8,
+                timestamp=time.time() - (30 * 86400),
+            )
+        )
+
+        ctx = recall.build_context("What happened yesterday with deployment?")
+        memory_lines = [line for line in ctx.split("\n") if line.startswith("- ")]
+        assert "yesterday" in memory_lines[0].lower()
+
+    def test_old_episode_uses_display_timestamp_anchor(self):
+        ep = Episode(
+            summary="historic planning meeting",
+            valence=0,
+            timestamp=time.time() - (120 * 86400),
+        )
+        text = ep.to_recall_text()
+        assert "(" in text and "UTC" in text
+
 
 class TestRecallText:
     def test_episode_recall_format(self):

@@ -7,6 +7,7 @@ on first initialize(). Schema versioned via user_version pragma.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -851,6 +852,9 @@ class KortexDB:
     def search_episodes(
         self, query: str, limit: int = 10, include_consolidated: bool = False
     ) -> List[Episode]:
+        normalized_query = self._normalize_fts_query(query)
+        if not normalized_query:
+            return []
         consolidated_clause = (
             "AND e.is_consolidated=0" if not include_consolidated else ""
         )
@@ -865,7 +869,7 @@ class KortexDB:
                 + """
                 ORDER BY rank
                 LIMIT ?""",
-                (query, limit),
+                (normalized_query, limit),
             )
             .fetchall()
         )
@@ -1087,6 +1091,9 @@ class KortexDB:
         return [self._row_to_fact(r) for r in rows]
 
     def search_facts(self, query: str, limit: int = 10) -> List[Fact]:
+        normalized_query = self._normalize_fts_query(query)
+        if not normalized_query:
+            return []
         rows = (
             self._get_conn()
             .execute(
@@ -1095,7 +1102,7 @@ class KortexDB:
                WHERE facts_fts MATCH ? AND f.status='active'
                ORDER BY rank
                LIMIT ?""",
-                (query, limit),
+                (normalized_query, limit),
             )
             .fetchall()
         )
@@ -1147,7 +1154,8 @@ class KortexDB:
     def find_similar_facts(
         self, text: str, predicate: Optional[str] = None, limit: int = 5
     ) -> List[Fact]:
-        if not text.strip():
+        normalized_query = self._normalize_fts_query(text)
+        if not normalized_query:
             return []
         try:
             if predicate:
@@ -1158,7 +1166,7 @@ class KortexDB:
                         JOIN facts_fts fts ON f.id = fts.rowid
                         WHERE facts_fts MATCH ? AND f.status='active' AND f.predicate=?
                         ORDER BY rank LIMIT ?""",
-                        (text, predicate, limit),
+                        (normalized_query, predicate, limit),
                     )
                     .fetchall()
                 )
@@ -1170,13 +1178,19 @@ class KortexDB:
                         JOIN facts_fts fts ON f.id = fts.rowid
                         WHERE facts_fts MATCH ? AND f.status='active'
                         ORDER BY rank LIMIT ?""",
-                        (text, limit),
+                        (normalized_query, limit),
                     )
                     .fetchall()
                 )
             return [self._row_to_fact(r) for r in rows]
         except sqlite3.OperationalError:
             return []
+
+    @staticmethod
+    def _normalize_fts_query(text: str) -> str:
+        tokens = re.findall(r"[A-Za-z0-9_]+", text.lower())
+        filtered = [token for token in tokens if len(token) > 1]
+        return " ".join(filtered)
 
     def count_facts(self, status: str = "active") -> int:
         return (

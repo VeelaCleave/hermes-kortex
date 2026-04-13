@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import math
 import logging
+import re
 from typing import List, Optional, Set
 
 from .config import KortexConfig
 from .db import KortexDB
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
-from .time_utils import now_epoch
+from .time_utils import epoch_to_display, now_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ class Recall:
     ) -> str:
         now = now_epoch()
         candidates: List[Episode] = []
+        temporal_window_days = self._detect_temporal_window_days(query)
 
         if query:
             search_results = self._db.search_episodes(query, limit=10)
@@ -176,7 +178,13 @@ class Recall:
 
         scored = []
         for ep in candidates:
-            score = self._rank_episode(ep, query, now)
+            score = self._rank_episode(
+                ep,
+                query,
+                now,
+                session_id=session_id,
+                temporal_window_days=temporal_window_days,
+            )
             scored.append((score, ep))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -325,11 +333,27 @@ class Recall:
 
         return " ".join(parts)
 
-    def _rank_episode(self, ep: Episode, query: str, now: float) -> float:
+    def _rank_episode(
+        self,
+        ep: Episode,
+        query: str,
+        now: float,
+        session_id: str = "",
+        temporal_window_days: Optional[float] = None,
+    ) -> float:
         # Recency: exponential decay with configurable half-life
         age_days = max((now - ep.timestamp) / 86400, 0.01)
         half_life = self._config.recency_decay_days
         recency = math.exp(-0.693 * age_days / half_life)  # ln(2) ≈ 0.693
+
+        if session_id and ep.session_id == session_id:
+            recency *= self._config.same_session_recency_boost
+
+        if temporal_window_days is not None:
+            distance = abs(age_days - temporal_window_days)
+            window_scale = max(temporal_window_days, 1.0)
+            temporal_alignment = math.exp(-distance / window_scale)
+            recency *= max(1.0, temporal_alignment * self._config.temporal_query_boost)
 
         salience = ep.salience
         emotional = ep.emotional_weight
@@ -344,6 +368,37 @@ class Recall:
                 relevance = min(0.5 + overlap * 0.15, 1.0)
 
         return relevance * 0.3 + salience * 0.25 + recency * 0.25 + emotional * 0.2
+
+    @staticmethod
+    def _detect_temporal_window_days(query: str) -> Optional[float]:
+        if not query:
+            return None
+
+        lowered = query.lower()
+        direct_map = {
+            "today": 0.0,
+            "yesterday": 1.0,
+            "last week": 7.0,
+            "last month": 30.0,
+        }
+        for phrase, days in direct_map.items():
+            if phrase in lowered:
+                return days
+
+        if "in march" in lowered:
+            return 30.0
+
+        match = re.search(r"(\d+)\s+(day|days|week|weeks|month|months)\s+ago", lowered)
+        if not match:
+            return None
+
+        value = float(match.group(1))
+        unit = match.group(2)
+        if unit.startswith("day"):
+            return value
+        if unit.startswith("week"):
+            return value * 7.0
+        return value * 30.0
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
