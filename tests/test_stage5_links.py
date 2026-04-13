@@ -264,6 +264,60 @@ class TestSupersededFactLinks:
         assert kortex_db.count_links() == 1
 
 
+class TestGraphTraversal:
+    def test_traverse_respects_max_hops(self, kortex_db, linker):
+        ep = _episode(kortex_db, summary="release planning", entities="Amelia")
+        linker.link_related_episodes(ep)
+        fact = _fact(kortex_db, text="ship Amelia tonight", source_episode_id=ep.id)
+        linker.link_episode_to_facts(ep.id, [fact.id])
+
+        entity_id = Linker._entity_id("amelia")
+        one_hop = linker.traverse([entity_id], max_hops=1)
+        two_hops = linker.traverse([entity_id], max_hops=2)
+
+        assert any(
+            node["node_type"] == "episode" and node["node_id"] == ep.id
+            for node in one_hop
+        )
+        assert not any(
+            node["node_type"] == "fact" and node["node_id"] == fact.id
+            for node in one_hop
+        )
+        assert any(
+            node["node_type"] == "fact" and node["node_id"] == fact.id
+            for node in two_hops
+        )
+
+    def test_traverse_score_propagates_with_decay_and_relation_weight(
+        self, kortex_db, linker
+    ):
+        ep1 = _episode(
+            kortex_db,
+            summary="release planning",
+            entities="Amelia",
+            topics="rollout,launch,ops",
+        )
+        ep2 = _episode(
+            kortex_db,
+            summary="follow-up mitigation",
+            topics="rollout,launch,ops",
+        )
+        linker.link_related_episodes(ep2)
+        fact = _fact(
+            kortex_db, text="Amelia wants same-night rollout", source_episode_id=ep1.id
+        )
+        linker.link_episode_to_facts(ep1.id, [fact.id])
+
+        entity_id = Linker._entity_id("amelia")
+        ranked = {
+            (node["node_type"], node["node_id"]): node["score"]
+            for node in linker.traverse([entity_id], max_hops=2)
+        }
+
+        assert ranked[("episode", ep1.id)] > ranked[("fact", fact.id)]
+        assert ranked[("fact", fact.id)] > ranked[("episode", ep2.id)]
+
+
 class TestDBLinkMethods:
     def test_get_links_from_returns_outgoing(self, kortex_db):
         kortex_db.insert_link("episode", 1, "fact", 2, "extracted_from", 0.8)

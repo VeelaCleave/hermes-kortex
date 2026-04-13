@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from typing import List, Set
+from collections import deque
+from typing import Dict, List, Set, Tuple
 
 from .db import KortexDB
 from .models import Episode
@@ -123,6 +124,51 @@ class Linker:
             if link["src_type"] == "episode"
         ]
 
+    def traverse(
+        self,
+        entity_ids: List[int],
+        max_hops: int = 2,
+        max_results: int = 50,
+        hop_decay: float = 0.5,
+    ) -> List[dict]:
+        """Traverse the memory graph from seed entities and return ranked nodes."""
+        seeds = [
+            ("entity", entity_id) for entity_id in self._unique_positive_ids(entity_ids)
+        ]
+        if not seeds or max_hops <= 0:
+            return []
+
+        queue = deque((node_type, node_id, 0, 1.0) for node_type, node_id in seeds)
+        seed_nodes = set(seeds)
+        best_scores: Dict[Tuple[str, int], float] = {seed: 1.0 for seed in seeds}
+
+        while queue:
+            node_type, node_id, hops, score = queue.popleft()
+            if hops >= max_hops:
+                continue
+
+            for next_type, next_id, relation, edge_weight in self._neighbors(
+                node_type, node_id
+            ):
+                next_score = (
+                    score * hop_decay * edge_weight * self._relation_weight(relation)
+                )
+                if next_score <= 0:
+                    continue
+                key = (next_type, next_id)
+                if next_score <= best_scores.get(key, 0.0):
+                    continue
+                best_scores[key] = next_score
+                queue.append((next_type, next_id, hops + 1, next_score))
+
+        ranked = [
+            {"node_type": node_type, "node_id": node_id, "score": score}
+            for (node_type, node_id), score in best_scores.items()
+            if (node_type, node_id) not in seed_nodes
+        ]
+        ranked.sort(key=lambda item: item["score"], reverse=True)
+        return ranked[:max_results]
+
     def _link_entities_to_episode(self, episode: Episode) -> int:
         if not episode.id:
             return 0
@@ -136,6 +182,20 @@ class Linker:
                 "co_occurs",
             )
         return created
+
+    def _neighbors(
+        self, node_type: str, node_id: int
+    ) -> List[Tuple[str, int, str, float]]:
+        neighbors: List[Tuple[str, int, str, float]] = []
+        for link in self._db.get_links_from(node_type, node_id, limit=100):
+            neighbors.append(
+                (link["dst_type"], link["dst_id"], link["relation"], link["weight"])
+            )
+        for link in self._db.get_links_to(node_type, node_id, limit=100):
+            neighbors.append(
+                (link["src_type"], link["src_id"], link["relation"], link["weight"])
+            )
+        return neighbors
 
     def _create_link(
         self,
@@ -171,6 +231,18 @@ class Linker:
         if not union:
             return 0.0
         return len(left & right) / len(union)
+
+    @staticmethod
+    def _relation_weight(relation: str) -> float:
+        return {
+            "extracted_from": 1.0,
+            "related_to": 0.7,
+            "co_occurs": 0.6,
+            "triggered": 0.6,
+            "resolves": 0.7,
+            "supersedes": 0.4,
+            "contradicts": 0.3,
+        }.get(relation, 0.5)
 
     @staticmethod
     def _entity_id(name: str) -> int:
