@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+import time
 
 import pytest
 
@@ -273,7 +273,7 @@ class TestDBOpenLoopMethods:
         old_loop = OpenLoop(
             kind="commitment",
             text="old commitment",
-            created_at=datetime.now(timezone.utc) - timedelta(days=30),
+            created_at=time.time() - (30 * 86400),
         )
         kortex_db.insert_open_loop(old_loop)
 
@@ -317,8 +317,8 @@ class TestConfidenceDecay:
         stale_fact = Fact(
             object_text="old preference",
             confidence=0.7,
-            first_seen=datetime.now(timezone.utc) - timedelta(days=90),
-            last_seen=datetime.now(timezone.utc) - timedelta(days=90),
+            first_seen=time.time() - (90 * 86400),
+            last_seen=time.time() - (90 * 86400),
         )
         kortex_db.insert_fact(stale_fact)
 
@@ -341,8 +341,8 @@ class TestConfidenceDecay:
         stale_fact = Fact(
             object_text="barely held fact",
             confidence=0.15,
-            first_seen=datetime.now(timezone.utc) - timedelta(days=120),
-            last_seen=datetime.now(timezone.utc) - timedelta(days=120),
+            first_seen=time.time() - (120 * 86400),
+            last_seen=time.time() - (120 * 86400),
         )
         kortex_db.insert_fact(stale_fact)
 
@@ -355,8 +355,8 @@ class TestConfidenceDecay:
         stale_fact = Fact(
             object_text="floor fact",
             confidence=0.1,
-            first_seen=datetime.now(timezone.utc) - timedelta(days=120),
-            last_seen=datetime.now(timezone.utc) - timedelta(days=120),
+            first_seen=time.time() - (120 * 86400),
+            last_seen=time.time() - (120 * 86400),
         )
         kortex_db.insert_fact(stale_fact)
 

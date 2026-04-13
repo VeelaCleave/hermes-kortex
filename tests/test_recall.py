@@ -1,3 +1,5 @@
+import time
+
 from kortex.models import Episode
 from kortex.recall import Recall
 
@@ -105,24 +107,20 @@ class TestEpisodeRanking:
 
 class TestRecallText:
     def test_episode_recall_format(self):
-        from datetime import datetime, timezone, timedelta
-
         ep = Episode(
             summary="argued about deployment strategy",
             valence=-1,
-            timestamp=datetime.now(timezone.utc) - timedelta(days=3),
+            timestamp=time.time() - (3 * 86400),
         )
         text = ep.to_recall_text()
         assert "3 days ago" in text
         assert "frustrated" in text
 
     def test_old_episode_includes_date(self):
-        from datetime import datetime, timezone, timedelta
-
         ep = Episode(
             summary="first meeting",
             valence=1,
-            timestamp=datetime.now(timezone.utc) - timedelta(days=63),
+            timestamp=time.time() - (63 * 86400),
         )
         text = ep.to_recall_text()
         assert "9 weeks ago" in text

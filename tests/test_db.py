@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+import time
 
 import pytest
 
@@ -195,7 +195,7 @@ class TestReflectionCRUD:
 class TestRelationshipState:
     def test_default_state(self, kortex_db):
         rel = kortex_db.get_relationship()
-        assert rel.user_id == "default"
+        assert rel.user_id == "__default__"
         assert rel.warmth == 0.5
         assert rel.total_turns == 0
 
