@@ -511,10 +511,10 @@ class TestDBIdentityDeltaStage6Methods:
 
 
 class TestProviderIdentityIntegration:
-    def test_get_tool_schemas_returns_both_tools(self, tmp_path):
+    def test_get_tool_schemas_returns_all_tools(self, tmp_path):
         provider = _provider(tmp_path)
         names = {schema["name"] for schema in provider.get_tool_schemas()}
-        assert names == {"kortex_search", "kortex_identity"}
+        assert names == {"kortex_search", "kortex_identity", "kortex_export"}
         provider.shutdown()
 
     def test_handle_tool_call_dispatches_kortex_identity_correctly(self, tmp_path):
