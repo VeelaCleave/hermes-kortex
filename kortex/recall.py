@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import math
 import logging
-from datetime import datetime, timezone
 from typing import List, Optional, Set
 
 from .config import KortexConfig
 from .db import KortexDB
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
+from .time_utils import now_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ class Recall:
         budget: int,
         existing_fact_ids: Optional[Set[int]] = None,
     ) -> str:
-        now = datetime.now(timezone.utc)
+        now = now_epoch()
         candidates: List[Episode] = []
 
         if query:
@@ -294,9 +294,9 @@ class Recall:
 
         return " ".join(parts)
 
-    def _rank_episode(self, ep: Episode, query: str, now: datetime) -> float:
+    def _rank_episode(self, ep: Episode, query: str, now: float) -> float:
         # Recency: exponential decay with configurable half-life
-        age_days = max((now - ep.timestamp).total_seconds() / 86400, 0.01)
+        age_days = max((now - ep.timestamp) / 86400, 0.01)
         half_life = self._config.recency_decay_days
         recency = math.exp(-0.693 * age_days / half_life)  # ln(2) ≈ 0.693
 

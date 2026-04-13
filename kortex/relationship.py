@@ -14,10 +14,10 @@ from the turn's affect signal.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
 from typing import Optional
 
 from .models import AffectSignal, RelationshipState
+from .time_utils import now_epoch
 
 
 # How quickly each dimension responds to new signals (0 = inert, 1 = instant)
@@ -186,6 +186,6 @@ def update_relationship(
 
     # Step 4: Bookkeeping
     current.total_turns += 1
-    current.last_updated = datetime.now(timezone.utc)
+    current.last_updated = now_epoch()
 
     return current

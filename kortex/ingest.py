@@ -14,11 +14,11 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from .db import KortexDB
 from .models import Episode, Fact, OpenLoop
+from .time_utils import now_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ class Ingestor:
         ep = Episode(
             session_id=session_id,
             turn_index=count,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=now_epoch(),
             user_text=user_text[:4000],
             assistant_text=assistant_text[:4000],
         )
