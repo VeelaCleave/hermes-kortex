@@ -16,6 +16,7 @@ from .config import KortexConfig, load_kortex_config
 from .db import KortexDB
 from .affect import score_affect
 from .ingest import Ingestor
+from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, RelationshipState
 from .recall import Recall
 from .reflect import process_reflections
@@ -91,6 +92,7 @@ class KortexProvider(MemoryProvider):
         self._config = config or KortexConfig()
         self._db: Optional[KortexDB] = None
         self._ingestor: Optional[Ingestor] = None
+        self._linker: Optional[Linker] = None
         self._recall: Optional[Recall] = None
         self._session_id: str = ""
         self._hermes_home: str = ""
@@ -116,6 +118,7 @@ class KortexProvider(MemoryProvider):
 
         self._db = KortexDB(db_path)
         self._ingestor = Ingestor(self._db)
+        self._linker = Linker(self._db)
         self._recall = Recall(self._db, self._config)
 
         logger.info("KORTEX initialized (session=%s, db=%s)", session_id, db_path)
@@ -172,9 +175,12 @@ class KortexProvider(MemoryProvider):
                     user_content, assistant_content, session_id=sid
                 )
 
+                facts = []
+                reflections = []
+
                 if self._config.auto_extract:
                     self._ingestor.extract_open_loops(user_content, ep.id)
-                    self._ingestor.extract_facts(user_content, ep.id)
+                    facts = self._ingestor.extract_facts(user_content, ep.id)
                     self._ingestor.resolve_answered_loops(assistant_content)
                     self._ingestor.resolve_completed_commitments(assistant_content)
 
@@ -191,9 +197,19 @@ class KortexProvider(MemoryProvider):
                 self._db.upsert_relationship(updated_rel)
 
                 if self._config.auto_extract:
-                    process_reflections(
+                    reflections = process_reflections(
                         self._db, user_content, assistant_content, affect, ep.id
                     )
+
+                if self._linker:
+                    self._linker.link_episode_to_facts(
+                        ep.id, [fact.id for fact in facts if fact.id is not None]
+                    )
+                    self._linker.link_episode_to_reflections(
+                        ep.id,
+                        [ref.id for ref in reflections if ref.id is not None],
+                    )
+                    self._linker.link_related_episodes(ep)
 
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",

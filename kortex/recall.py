@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .config import KortexConfig
 from .db import KortexDB
@@ -32,6 +32,7 @@ class Recall:
     def build_context(self, query: str, session_id: str = "") -> str:
         sections = []
         budget_used = 0
+        selected_facts = self._select_facts(query)
 
         relationship = self._db.get_relationship()
         rel_text = relationship.to_compact_text()
@@ -45,13 +46,16 @@ class Recall:
             budget_used += self._estimate_tokens(rel_text)
 
         facts_budget = self._config.budget.get("stable_facts", 400)
-        facts_text = self._build_facts_section(query, facts_budget)
+        facts_text = self._build_facts_section(selected_facts, facts_budget)
         if facts_text:
             sections.append(facts_text)
             budget_used += self._estimate_tokens(facts_text)
 
         episodes_budget = self._config.budget.get("episodic_memories", 800)
-        episodes_text = self._build_episodes_section(query, session_id, episodes_budget)
+        fact_ids = {fact.id for fact in selected_facts if fact.id is not None}
+        episodes_text = self._build_episodes_section(
+            query, session_id, episodes_budget, existing_fact_ids=fact_ids
+        )
         if episodes_text:
             sections.append(episodes_text)
             budget_used += self._estimate_tokens(episodes_text)
@@ -80,7 +84,7 @@ class Recall:
 
         return full
 
-    def _build_facts_section(self, query: str, budget: int) -> str:
+    def _select_facts(self, query: str) -> List[Fact]:
         facts: List[Fact] = []
 
         if query:
@@ -96,6 +100,11 @@ class Recall:
             seen_ids = {f.id for f in facts}
             facts.extend(f for f in top_facts if f.id not in seen_ids)
 
+        return facts[: self._config.max_facts_per_recall]
+
+    def _build_facts_section(self, facts: List[Fact], budget: int) -> str:
+        facts = facts[: self._config.max_facts_per_recall]
+
         if not facts:
             return ""
 
@@ -109,7 +118,13 @@ class Recall:
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
-    def _build_episodes_section(self, query: str, session_id: str, budget: int) -> str:
+    def _build_episodes_section(
+        self,
+        query: str,
+        session_id: str,
+        budget: int,
+        existing_fact_ids: Optional[Set[int]] = None,
+    ) -> str:
         now = datetime.now(timezone.utc)
         candidates: List[Episode] = []
 
@@ -140,11 +155,64 @@ class Recall:
             return ""
 
         lines = ["Recalled memories:"]
+        top_episodes = []
         for _score, ep in top:
+            top_episodes.append(ep)
             lines.append(f"- {ep.to_recall_text(now)}")
+
+        lines.extend(self._enrich_with_links(top_episodes, existing_fact_ids or set()))
 
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
+
+    def _enrich_with_links(
+        self, top_episodes: List[Episode], existing_fact_ids: set
+    ) -> List[str]:
+        """Pull in related context via entity links. Returns extra context lines."""
+        lines: List[str] = []
+        seen_episode_ids = {ep.id for ep in top_episodes if ep.id is not None}
+        added_fact_ids = set(existing_fact_ids)
+        added_related_ids = set()
+
+        for ep in top_episodes:
+            if not ep.id:
+                continue
+
+            for link in self._db.get_links_from(
+                "episode", ep.id, relation="extracted_from", limit=3
+            ):
+                if link["dst_type"] != "fact" or link["dst_id"] in added_fact_ids:
+                    continue
+                fact = self._db.get_fact(link["dst_id"])
+                if not fact or fact.status != "active":
+                    continue
+                lines.append(f"  - Related fact: {fact.object_text}")
+                added_fact_ids.add(fact.id)
+                if len(lines) >= 3:
+                    return lines
+
+            if ep.salience <= 0.7:
+                continue
+
+            for link in self._db.get_links_from(
+                "episode", ep.id, relation="related_to", limit=2
+            ):
+                related_id = link["dst_id"]
+                if (
+                    link["dst_type"] != "episode"
+                    or related_id in seen_episode_ids
+                    or related_id in added_related_ids
+                ):
+                    continue
+                related = self._db.get_episode(related_id)
+                if not related or not related.summary:
+                    continue
+                lines.append(f"  - Related memory: {related.summary}")
+                added_related_ids.add(related_id)
+                if len(lines) >= 3:
+                    return lines
+
+        return lines
 
     def _build_loops_section(self, budget: int) -> str:
         loops = self._db.get_open_loops(limit=self._config.max_loops_per_recall)

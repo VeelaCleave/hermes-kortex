@@ -1,0 +1,173 @@
+"""Heuristic graph linking for KORTEX memories."""
+
+from __future__ import annotations
+
+import hashlib
+from typing import List, Set
+
+from .db import KortexDB
+from .models import Episode
+
+
+class Linker:
+    """Creates and traverses lightweight memory graph edges."""
+
+    def __init__(self, db: KortexDB):
+        self._db = db
+
+    def link_episode_to_facts(self, episode_id: int, fact_ids: List[int]) -> int:
+        """Create episode→fact links. Returns count of links created."""
+        created = 0
+        for fact_id in self._unique_positive_ids(fact_ids):
+            created += self._create_link(
+                "episode", episode_id, "fact", fact_id, "extracted_from"
+            )
+            for old_fact in self._db.get_facts_superseded_by(fact_id, limit=10):
+                if old_fact.id:
+                    self.link_superseded_facts(old_fact.id, fact_id)
+        return created
+
+    def link_episode_to_reflections(
+        self, episode_id: int, reflection_ids: List[int]
+    ) -> int:
+        """Create episode→reflection links. Returns count of links created."""
+        created = 0
+        for reflection_id in self._unique_positive_ids(reflection_ids):
+            created += self._create_link(
+                "episode", episode_id, "reflection", reflection_id, "triggered"
+            )
+        return created
+
+    def link_related_episodes(self, episode: Episode, max_lookback: int = 50) -> int:
+        """Find and link related episodes by shared entities/topics. Returns count."""
+        if not episode.id:
+            return 0
+
+        created = self._link_entities_to_episode(episode)
+        tokens = self._episode_tokens(episode)
+        if not tokens:
+            return created
+
+        recent = self._db.get_recent_episodes(limit=max_lookback + 1)
+        for other in recent:
+            if not other.id or other.id == episode.id:
+                continue
+
+            self._link_entities_to_episode(other)
+            other_tokens = self._episode_tokens(other)
+            if not other_tokens:
+                continue
+
+            score = self._jaccard(tokens, other_tokens)
+            if score < 0.3:
+                continue
+
+            created += self._create_link(
+                "episode", episode.id, "episode", other.id, "related_to", weight=score
+            )
+            created += self._create_link(
+                "episode", other.id, "episode", episode.id, "related_to", weight=score
+            )
+
+        return created
+
+    def link_superseded_facts(self, old_fact_id: int, new_fact_id: int) -> None:
+        """Create fact→fact supersession link."""
+        if old_fact_id <= 0 or new_fact_id <= 0:
+            return
+        self._create_link("fact", old_fact_id, "fact", new_fact_id, "supersedes")
+
+    def get_related_episodes(self, episode_id: int, limit: int = 5) -> List[int]:
+        """Get episode IDs linked to this episode."""
+        return [
+            link["dst_id"]
+            for link in self._db.get_links_from(
+                "episode", episode_id, relation="related_to", limit=limit
+            )
+            if link["dst_type"] == "episode"
+        ]
+
+    def get_episode_facts(self, episode_id: int) -> List[int]:
+        """Get fact IDs linked to this episode."""
+        return [
+            link["dst_id"]
+            for link in self._db.get_links_from(
+                "episode", episode_id, relation="extracted_from", limit=100
+            )
+            if link["dst_type"] == "fact"
+        ]
+
+    def get_fact_episodes(self, fact_id: int) -> List[int]:
+        """Get episode IDs where this fact was extracted."""
+        return [
+            link["src_id"]
+            for link in self._db.get_links_to(
+                "fact", fact_id, relation="extracted_from", limit=100
+            )
+            if link["src_type"] == "episode"
+        ]
+
+    def _link_entities_to_episode(self, episode: Episode) -> int:
+        if not episode.id:
+            return 0
+        created = 0
+        for entity_name in self._split_csv(episode.entities):
+            created += self._create_link(
+                "entity",
+                self._entity_id(entity_name),
+                "episode",
+                episode.id,
+                "co_occurs",
+            )
+        return created
+
+    def _create_link(
+        self,
+        src_type: str,
+        src_id: int,
+        dst_type: str,
+        dst_id: int,
+        relation: str,
+        weight: float = 1.0,
+    ) -> int:
+        if src_id <= 0 or dst_id <= 0:
+            return 0
+        if self._db.link_exists(src_type, src_id, dst_type, dst_id, relation):
+            return 0
+        self._db.insert_link(
+            src_type, src_id, dst_type, dst_id, relation, weight=weight
+        )
+        return 1
+
+    @classmethod
+    def _episode_tokens(cls, episode: Episode) -> Set[str]:
+        return set(cls._split_csv(episode.entities)) | set(
+            cls._split_csv(episode.topics)
+        )
+
+    @staticmethod
+    def _split_csv(value: str) -> List[str]:
+        return [part.strip().lower() for part in value.split(",") if part.strip()]
+
+    @staticmethod
+    def _jaccard(left: Set[str], right: Set[str]) -> float:
+        union = left | right
+        if not union:
+            return 0.0
+        return len(left & right) / len(union)
+
+    @staticmethod
+    def _entity_id(name: str) -> int:
+        digest = hashlib.sha1(name.strip().lower().encode("utf-8")).hexdigest()
+        return int(digest[:15], 16)
+
+    @staticmethod
+    def _unique_positive_ids(values: List[int]) -> List[int]:
+        seen = set()
+        result = []
+        for value in values:
+            if not isinstance(value, int) or value <= 0 or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result

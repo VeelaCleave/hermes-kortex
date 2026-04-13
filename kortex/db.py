@@ -445,6 +445,25 @@ class KortexDB:
             )
         return [self._row_to_fact(r) for r in rows]
 
+    def get_fact(self, fact_id: int) -> Optional[Fact]:
+        row = (
+            self._get_conn()
+            .execute("SELECT * FROM facts WHERE id=?", (fact_id,))
+            .fetchone()
+        )
+        return self._row_to_fact(row) if row else None
+
+    def get_facts_superseded_by(self, new_fact_id: int, limit: int = 20) -> List[Fact]:
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM facts WHERE superseded_by=? ORDER BY id DESC LIMIT ?",
+                (new_fact_id, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_fact(r) for r in rows]
+
     def search_facts(self, query: str, limit: int = 10) -> List[Fact]:
         rows = (
             self._get_conn()
@@ -668,6 +687,14 @@ class KortexDB:
             )
         return [self._row_to_reflection(r) for r in rows]
 
+    def get_reflection(self, reflection_id: int) -> Optional[Reflection]:
+        row = (
+            self._get_conn()
+            .execute("SELECT * FROM reflections WHERE id=?", (reflection_id,))
+            .fetchone()
+        )
+        return self._row_to_reflection(row) if row else None
+
     def search_reflections(self, query: str, limit: int = 10) -> List[Reflection]:
         rows = (
             self._get_conn()
@@ -839,6 +866,95 @@ class KortexDB:
                 (src_type, src_id, dst_type, dst_id, relation, weight),
             )
             return cur.lastrowid
+
+    def get_links_from(
+        self,
+        src_type: str,
+        src_id: int,
+        relation: str = None,
+        limit: int = 20,
+    ) -> List[dict]:
+        query = (
+            "SELECT dst_type, dst_id, relation, weight FROM entity_links "
+            "WHERE src_type=? AND src_id=?"
+        )
+        params: List[Any] = [src_type, src_id]
+        if relation:
+            query += " AND relation=?"
+            params.append(relation)
+        query += " ORDER BY weight DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._get_conn().execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "dst_type": row["dst_type"],
+                "dst_id": row["dst_id"],
+                "relation": row["relation"],
+                "weight": row["weight"],
+            }
+            for row in rows
+        ]
+
+    def get_links_to(
+        self,
+        dst_type: str,
+        dst_id: int,
+        relation: str = None,
+        limit: int = 20,
+    ) -> List[dict]:
+        query = (
+            "SELECT src_type, src_id, relation, weight FROM entity_links "
+            "WHERE dst_type=? AND dst_id=?"
+        )
+        params: List[Any] = [dst_type, dst_id]
+        if relation:
+            query += " AND relation=?"
+            params.append(relation)
+        query += " ORDER BY weight DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._get_conn().execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "src_type": row["src_type"],
+                "src_id": row["src_id"],
+                "relation": row["relation"],
+                "weight": row["weight"],
+            }
+            for row in rows
+        ]
+
+    def delete_links(self, src_type: str, src_id: int) -> int:
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM entity_links WHERE src_type=? AND src_id=?",
+                (src_type, src_id),
+            )
+            return cur.rowcount
+
+    def count_links(self) -> int:
+        return (
+            self._get_conn().execute("SELECT COUNT(*) FROM entity_links").fetchone()[0]
+        )
+
+    def link_exists(
+        self,
+        src_type: str,
+        src_id: int,
+        dst_type: str,
+        dst_id: int,
+        relation: str,
+    ) -> bool:
+        row = (
+            self._get_conn()
+            .execute(
+                """SELECT 1 FROM entity_links
+                   WHERE src_type=? AND src_id=? AND dst_type=? AND dst_id=? AND relation=?
+                   LIMIT 1""",
+                (src_type, src_id, dst_type, dst_id, relation),
+            )
+            .fetchone()
+        )
+        return row is not None
 
     # -- Emotion Log ---------------------------------------------------------
 
