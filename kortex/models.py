@@ -7,9 +7,10 @@ just typed containers that map 1:1 to SQLite rows.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+
+from .time_utils import epoch_to_display, epoch_to_iso, now_epoch
 
 
 class Valence(Enum):
@@ -27,9 +28,10 @@ class Episode:
     """A single conversational turn with extracted metadata."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     session_id: str = ""
     turn_index: int = 0
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: float = field(default_factory=now_epoch)
     user_text: str = ""
     assistant_text: str = ""
     summary: str = ""
@@ -39,6 +41,10 @@ class Episode:
     topics: str = ""  # comma-separated topic tags
     entities: str = ""  # comma-separated entity names
     is_consolidated: bool = False
+    last_accessed_at: Optional[float] = None
+    retrieval_count: int = 0
+    consolidated_into: Optional[int] = None
+    raw_preserved: bool = True
 
     @property
     def emotional_weight(self) -> float:
@@ -47,13 +53,13 @@ class Episode:
 
     @property
     def timestamp_iso(self) -> str:
-        return self.timestamp.isoformat()
+        return epoch_to_iso(self.timestamp)
 
-    def to_recall_text(self, now: Optional[datetime] = None) -> str:
+    def to_recall_text(self, now: Optional[float] = None) -> str:
         """Format this episode for injection into context."""
-        now = now or datetime.now(timezone.utc)
-        delta = now - self.timestamp
-        days = delta.days
+        now = now or now_epoch()
+        delta_seconds = max(now - self.timestamp, 0.0)
+        days = int(delta_seconds // 86400)
 
         if days == 0:
             time_anchor = "earlier today"
@@ -66,9 +72,7 @@ class Episode:
             time_anchor = f"{weeks} week{'s' if weeks > 1 else ''} ago"
         else:
             # Include the actual date for older memories
-            time_anchor = (
-                f"{days // 7} weeks ago ({self.timestamp.strftime('%a %b %d, %H:%M')})"
-            )
+            time_anchor = f"{days // 7} weeks ago ({epoch_to_display(self.timestamp)})"
 
         valence_label = ""
         if self.valence <= -2:
@@ -89,16 +93,22 @@ class Fact:
     """A durable fact about the user, agent, or a project."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     subject_type: str = "user"  # user, agent, project, general
     subject_id: str = ""
     predicate: str = ""  # e.g. "prefers", "works_on", "dislikes"
     object_text: str = ""  # the actual fact content
     confidence: float = 0.5  # 0.0 = uncertain, 1.0 = rock solid
     source_episode_id: Optional[int] = None
-    first_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    first_seen: float = field(default_factory=now_epoch)
+    last_seen: float = field(default_factory=now_epoch)
     status: str = "active"  # active, superseded, retracted
     superseded_by: Optional[int] = None
+    last_accessed_at: Optional[float] = None
+    retrieval_count: int = 0
+    valid_from: Optional[float] = None
+    valid_to: Optional[float] = None
+    contradiction_status: str = "active"
 
 
 @dataclass
@@ -106,13 +116,17 @@ class OpenLoop:
     """A commitment, unresolved question, or pending task."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     kind: str = "commitment"  # commitment, task, question, tension
     text: str = ""
     due_hint: str = ""  # optional date hint
     status: str = "open"  # open, resolved, expired, cancelled
     source_episode_id: Optional[int] = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    resolved_at: Optional[datetime] = None
+    created_at: float = field(default_factory=now_epoch)
+    resolved_at: Optional[float] = None
+    last_accessed_at: Optional[float] = None
+    resolution: str = ""
+    resolved_by_episode_id: Optional[int] = None
 
 
 @dataclass
@@ -120,15 +134,18 @@ class Reflection:
     """A learned pattern, mistake, or style preference."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     kind: str = "pattern"  # mistake, pattern, preference, style
     text: str = ""
     confidence: float = 0.3
     source_episode_id: Optional[int] = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_reinforced: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    created_at: float = field(default_factory=now_epoch)
+    last_reinforced: float = field(default_factory=now_epoch)
     reinforcement_count: int = 1
+    last_accessed_at: Optional[float] = None
+    retrieval_count: int = 0
+    promotion_status: str = "active"
+    promoted_at: Optional[float] = None
 
 
 @dataclass
@@ -136,7 +153,7 @@ class RelationshipState:
     """Current relationship dynamics with a user."""
 
     id: Optional[int] = None
-    user_id: str = "default"
+    user_id: str = "__default__"
     warmth: float = 0.5  # 0=cold, 1=warm
     trust: float = 0.5  # 0=distrustful, 1=high trust
     tension: float = 0.0  # 0=none, 1=high tension
@@ -144,7 +161,7 @@ class RelationshipState:
     humor: float = 0.0  # 0=formal, 1=very playful
     formality: float = 0.5  # 0=casual, 1=formal
     volatility: float = 0.0  # 0=stable, 1=unpredictable
-    last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_updated: float = field(default_factory=now_epoch)
     total_turns: int = 0
 
     def to_compact_text(self) -> str:
@@ -248,10 +265,11 @@ class IdentityDelta:
     """A proposed change to the agent's self-model / SOUL.md."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     text: str = ""
     confidence: float = 0.3
     source_episode_id: Optional[int] = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: float = field(default_factory=now_epoch)
     applied: bool = False
 
 
@@ -260,6 +278,7 @@ class EntityLink:
     """A typed edge between any two objects in the memory graph."""
 
     id: Optional[int] = None
+    user_id: str = "__default__"
     src_type: str = ""  # episode, fact, entity, reflection
     src_id: int = 0
     dst_type: str = ""
