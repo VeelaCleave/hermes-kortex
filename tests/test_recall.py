@@ -66,6 +66,19 @@ class TestBuildContext:
         token_estimate = len(ctx) // 4
         assert token_estimate <= 250
 
+    def test_context_includes_conversation_summaries(self, kortex_db, recall):
+        kortex_db.insert_conversation_summary(
+            {
+                "session_id": "s1",
+                "summary_text": "Conversation covered: project architecture and testing strategy",
+                "episode_count": 2,
+                "key_entities": "Architecture,Pytest",
+            }
+        )
+        ctx = recall.build_context("architecture")
+        assert "Conversation summaries:" in ctx
+        assert "testing strategy" in ctx
+
 
 class TestEpisodeRanking:
     def test_salient_episodes_rank_higher(self, kortex_db, recall):

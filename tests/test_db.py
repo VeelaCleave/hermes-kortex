@@ -105,6 +105,50 @@ class TestEpisodeCRUD:
         assert kortex_db.get_session_turn_count("s1") == 2
         assert kortex_db.get_session_turn_count("s2") == 1
 
+    def test_get_episodes_for_session(self, kortex_db):
+        kortex_db.insert_episode(
+            Episode(session_id="s1", turn_index=0, summary="first")
+        )
+        kortex_db.insert_episode(
+            Episode(session_id="s1", turn_index=1, summary="second")
+        )
+        kortex_db.insert_episode(
+            Episode(session_id="s2", turn_index=0, summary="other")
+        )
+        episodes = kortex_db.get_episodes_for_session("s1")
+        assert [ep.summary for ep in episodes] == ["first", "second"]
+
+
+class TestConversationSummaries:
+    def test_insert_and_list_conversation_summaries(self, kortex_db):
+        summary_id = kortex_db.insert_conversation_summary(
+            {
+                "session_id": "s1",
+                "summary_text": "Conversation covered: architecture and deployment",
+                "episode_count": 2,
+                "key_entities": "Alice,PostgreSQL",
+            }
+        )
+        assert summary_id > 0
+
+        summaries = kortex_db.list_conversation_summaries(limit=5)
+        assert len(summaries) == 1
+        assert summaries[0]["session_id"] == "s1"
+        assert "architecture" in summaries[0]["summary_text"]
+
+    def test_search_conversation_summaries(self, kortex_db):
+        kortex_db.insert_conversation_summary(
+            {
+                "session_id": "s1",
+                "summary_text": "Conversation covered: kubernetes deployment and rollback",
+                "episode_count": 3,
+                "key_entities": "Kubernetes",
+            }
+        )
+        results = kortex_db.search_conversation_summaries("rollback")
+        assert len(results) == 1
+        assert "kubernetes" in results[0]["summary_text"].lower()
+
 
 class TestFactCRUD:
     def test_insert_and_retrieve(self, kortex_db):

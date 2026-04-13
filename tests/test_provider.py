@@ -177,6 +177,28 @@ class TestProviderToolCall:
         assert len(result["loops"]) == 1
         p.shutdown()
 
+    def test_list_conversations_action(self, tmp_path):
+        p = self._setup_provider(tmp_path)
+        p._db.insert_conversation_summary(
+            {
+                "session_id": "test-session",
+                "summary_text": "Conversation covered: deployment plan and rollback steps",
+                "episode_count": 2,
+                "key_entities": "Kubernetes",
+            }
+        )
+        result = json.loads(
+            p.handle_tool_call(
+                "kortex_search",
+                {
+                    "action": "list_conversations",
+                },
+            )
+        )
+        assert len(result["conversations"]) == 1
+        assert "deployment plan" in result["conversations"][0]["summary_text"]
+        p.shutdown()
+
     def test_recall_episode_action(self, tmp_path):
         p = self._setup_provider(tmp_path)
         from kortex.models import Episode
@@ -219,6 +241,47 @@ class TestProviderOnMemoryWrite:
         facts = p._db.get_active_facts(subject_type="user")
         assert len(facts) == 1
         assert "dark theme" in facts[0].object_text
+        p.shutdown()
+
+
+class TestProviderSessionEnd:
+    def test_on_session_end_creates_conversation_summary(self, tmp_path):
+        config = KortexConfig(db_path=str(tmp_path / "test.db"))
+        p = KortexProvider(config=config)
+        p.initialize("test-session", hermes_home=str(tmp_path))
+
+        from kortex.models import Episode
+
+        p._db.insert_episode(
+            Episode(
+                session_id="test-session",
+                summary="discussed deployment rollback plan",
+                user_text="how do we roll back",
+                salience=0.7,
+                entities="Kubernetes",
+            )
+        )
+        p._db.insert_episode(
+            Episode(
+                session_id="test-session",
+                summary="agreed on staging validation checklist",
+                user_text="let's verify staging first",
+                salience=0.6,
+                entities="Staging",
+            )
+        )
+
+        p.on_session_end(
+            [
+                {"role": "user", "content": "how do we roll back"},
+                {"role": "assistant", "content": "use the deployment history"},
+            ]
+        )
+
+        summaries = p._db.list_conversation_summaries(limit=5)
+        assert len(summaries) == 1
+        assert summaries[0]["session_id"] == "test-session"
+        assert "rollback" in summaries[0]["summary_text"].lower()
         p.shutdown()
 
 
