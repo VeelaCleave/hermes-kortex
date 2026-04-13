@@ -1235,12 +1235,19 @@ class KortexDB:
         )
         return [self._row_to_open_loop(r) for r in rows]
 
-    def resolve_loop(self, loop_id: int) -> None:
+    def resolve_loop(
+        self,
+        loop_id: int,
+        resolution: str = "",
+        resolved_by_episode_id: Optional[int] = None,
+    ) -> None:
         now = now_epoch()
         with self._tx() as conn:
             conn.execute(
-                "UPDATE open_loops SET status='resolved', resolved_at=? WHERE id=?",
-                (now, loop_id),
+                """UPDATE open_loops
+                   SET status='resolved', resolved_at=?, resolution=?, resolved_by_episode_id=?
+                   WHERE id=?""",
+                (now, resolution, resolved_by_episode_id, loop_id),
             )
 
     def expire_old_loops(self, days_threshold: float = 14.0) -> int:

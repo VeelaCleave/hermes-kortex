@@ -321,7 +321,9 @@ class Ingestor:
 
         return results
 
-    def resolve_answered_loops(self, assistant_text: str) -> List[OpenLoop]:
+    def resolve_answered_loops(
+        self, assistant_text: str, resolving_episode_id: Optional[int] = None
+    ) -> List[OpenLoop]:
         """Auto-resolve open question loops if the assistant answered them."""
         resolved = []
         open_loops = self._db.get_open_loops(limit=20)
@@ -358,12 +360,19 @@ class Ingestor:
             assistant_lower = assistant_text.lower()
             matches = sum(1 for kw in loop_keywords if kw in assistant_lower)
             if matches >= max(1, len(loop_keywords) * 0.4):
-                self._db.resolve_loop(loop.id)
+                resolution = self._build_loop_resolution(assistant_text, loop_keywords)
+                self._db.resolve_loop(
+                    loop.id,
+                    resolution=resolution,
+                    resolved_by_episode_id=resolving_episode_id,
+                )
                 resolved.append(loop)
 
         return resolved
 
-    def resolve_completed_commitments(self, assistant_text: str) -> List[OpenLoop]:
+    def resolve_completed_commitments(
+        self, assistant_text: str, resolving_episode_id: Optional[int] = None
+    ) -> List[OpenLoop]:
         """Resolve commitment loops when assistant confirms completion."""
         _done_signals = re.compile(
             r"\b(?:done|completed|finished|fixed|deployed|resolved|implemented|shipped)\b",
@@ -404,7 +413,12 @@ class Ingestor:
             assistant_lower = assistant_text.lower()
             matches = sum(1 for kw in loop_keywords if kw in assistant_lower)
             if matches >= max(1, len(loop_keywords) * 0.4):
-                self._db.resolve_loop(loop.id)
+                resolution = self._build_loop_resolution(assistant_text, loop_keywords)
+                self._db.resolve_loop(
+                    loop.id,
+                    resolution=resolution,
+                    resolved_by_episode_id=resolving_episode_id,
+                )
                 resolved.append(loop)
 
         return resolved
@@ -428,6 +442,17 @@ class Ingestor:
                 candidates.append((predicate, match.group(1)))
 
         return candidates
+
+    @staticmethod
+    def _build_loop_resolution(assistant_text: str, loop_keywords: set[str]) -> str:
+        clean_text = assistant_text.strip()
+        if not clean_text:
+            return "resolved from assistant response"
+
+        fragments = [kw for kw in sorted(loop_keywords) if kw in clean_text.lower()][:3]
+        if fragments:
+            return f"Resolved via assistant response about: {', '.join(fragments)}"
+        return f"Resolved via assistant response: {clean_text[:160]}"
 
     def _find_matching_fact(self, predicate: str, object_text: str) -> Optional[Fact]:
         existing = self._db.get_facts_by_predicate(predicate, limit=10)

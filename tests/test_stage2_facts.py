@@ -185,12 +185,23 @@ class TestOpenLoopLifecycle:
         assert len(loops_before) >= 1
 
         resolved = ingestor.resolve_answered_loops(
-            "Sure! For the kubernetes deployment, you need to create a deployment.yaml..."
+            "Sure! For the kubernetes deployment, you need to create a deployment.yaml...",
+            resolving_episode_id=ep.id,
         )
         assert len(resolved) >= 1
 
         loops_after = kortex_db.get_open_loops()
         assert len(loops_after) < len(loops_before)
+        resolved_row = (
+            kortex_db._get_conn()
+            .execute(
+                "SELECT resolution, resolved_by_episode_id FROM open_loops WHERE id=?",
+                (resolved[0].id,),
+            )
+            .fetchone()
+        )
+        assert "deployment" in resolved_row["resolution"].lower()
+        assert resolved_row["resolved_by_episode_id"] == ep.id
 
     def test_unrelated_answer_does_not_resolve(self, ingestor, kortex_db):
         ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
@@ -210,9 +221,21 @@ class TestOpenLoopLifecycle:
         assert len(loops_before) >= 1
 
         resolved = ingestor.resolve_completed_commitments(
-            "Done! I've fixed the authentication bug. The issue was in the token validation."
+            "Done! I've fixed the authentication bug. The issue was in the token validation.",
+            resolving_episode_id=ep.id,
         )
         assert len(resolved) >= 1
+
+        resolved_row = (
+            kortex_db._get_conn()
+            .execute(
+                "SELECT resolution, resolved_by_episode_id FROM open_loops WHERE id=?",
+                (resolved[0].id,),
+            )
+            .fetchone()
+        )
+        assert "authentication" in resolved_row["resolution"].lower()
+        assert resolved_row["resolved_by_episode_id"] == ep.id
 
     def test_commitment_not_resolved_without_done_signal(self, ingestor, kortex_db):
         ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
@@ -422,5 +445,10 @@ class TestSyncTurnIntegration:
             "Thanks!", "Done! The database migration has been completed successfully."
         )
         time.sleep(1.0)
+
+        resolves_links = p._db.get_links_from(
+            "episode", 2, relation="resolves", limit=10
+        )
+        assert any(link["dst_type"] == "open_loop" for link in resolves_links)
 
         p.shutdown()

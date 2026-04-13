@@ -233,8 +233,16 @@ class KortexProvider(MemoryProvider):
                 if self._config.auto_extract:
                     self._ingestor.extract_open_loops(user_content, ep.id)
                     facts = self._ingestor.extract_facts(user_content, ep.id)
-                    self._ingestor.resolve_answered_loops(assistant_content)
-                    self._ingestor.resolve_completed_commitments(assistant_content)
+                    resolved_loops = self._ingestor.resolve_answered_loops(
+                        assistant_content, resolving_episode_id=ep.id
+                    )
+                    resolved_loops.extend(
+                        self._ingestor.resolve_completed_commitments(
+                            assistant_content, resolving_episode_id=ep.id
+                        )
+                    )
+                else:
+                    resolved_loops = []
 
                 affect = score_affect(user_content, assistant_content)
                 if affect.is_significant:
@@ -259,6 +267,10 @@ class KortexProvider(MemoryProvider):
                     self._linker.link_episode_to_reflections(
                         ep.id,
                         [ref.id for ref in reflections if ref.id is not None],
+                    )
+                    self._linker.link_episode_to_loops(
+                        ep.id,
+                        [loop.id for loop in resolved_loops if loop.id is not None],
                     )
                     self._linker.link_related_episodes(ep)
 

@@ -210,9 +210,18 @@ class TestOpenLoopCRUD:
     def test_resolve_loop(self, kortex_db):
         loop = OpenLoop(kind="task", text="deploy to staging")
         kortex_db.insert_open_loop(loop)
-        kortex_db.resolve_loop(loop.id)
+        episode = Episode(session_id="s1", summary="Deployment completed")
+        kortex_db.insert_episode(episode)
+        kortex_db.resolve_loop(
+            loop.id,
+            resolution="Resolved via deploy completion",
+            resolved_by_episode_id=episode.id,
+        )
         open_loops = kortex_db.get_open_loops()
         assert len(open_loops) == 0
+
+        row = kortex_db.search_open_loops("deploy", limit=5)
+        assert row == []
 
 
 class TestReflectionCRUD:

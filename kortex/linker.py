@@ -84,6 +84,15 @@ class Linker:
         self._create_link("fact", old_fact_id, "fact", new_fact_id, "contradicts")
         self._create_link("fact", new_fact_id, "fact", old_fact_id, "contradicts")
 
+    def link_episode_to_loops(self, episode_id: int, loop_ids: List[int]) -> int:
+        """Create episode→open_loop resolution links."""
+        created = 0
+        for loop_id in self._unique_positive_ids(loop_ids):
+            created += self._create_link(
+                "episode", episode_id, "open_loop", loop_id, "resolves"
+            )
+        return created
+
     def get_related_episodes(self, episode_id: int, limit: int = 5) -> List[int]:
         """Get episode IDs linked to this episode."""
         return [
