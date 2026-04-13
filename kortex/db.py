@@ -883,6 +883,78 @@ class KortexDB:
             .fetchone()[0]
         )
 
+    def get_episodes_for_session(
+        self, session_id: str, limit: Optional[int] = None
+    ) -> List[Episode]:
+        query = "SELECT * FROM episodes WHERE session_id=? ORDER BY timestamp ASC"
+        params: List[Any] = [session_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._get_conn().execute(query, tuple(params)).fetchall()
+        return [self._row_to_episode(r) for r in rows]
+
+    # -- Conversation summaries ---------------------------------------------
+
+    def insert_conversation_summary(self, summary: dict) -> int:
+        with self._tx() as conn:
+            cur = conn.execute(
+                """INSERT INTO conversation_summaries
+                   (user_id, session_id, summary_text, summary_level, episode_range_start,
+                    episode_range_end, episode_count, key_entities, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    summary.get("user_id", DEFAULT_USER_ID),
+                    summary.get("session_id", ""),
+                    summary.get("summary_text", ""),
+                    summary.get("summary_level", "conversation"),
+                    summary.get("episode_range_start"),
+                    summary.get("episode_range_end"),
+                    summary.get("episode_count", 0),
+                    summary.get("key_entities", ""),
+                    summary.get("created_at", now_epoch()),
+                    summary.get("updated_at", now_epoch()),
+                ),
+            )
+            return cur.lastrowid
+
+    def list_conversation_summaries(
+        self, limit: int = 10, session_id: Optional[str] = None
+    ) -> List[dict]:
+        if session_id:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM conversation_summaries WHERE session_id=? ORDER BY updated_at DESC LIMIT ?",
+                    (session_id, limit),
+                )
+                .fetchall()
+            )
+        else:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM conversation_summaries ORDER BY updated_at DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            )
+        return [dict(r) for r in rows]
+
+    def search_conversation_summaries(self, query: str, limit: int = 5) -> List[dict]:
+        like = f"%{query}%"
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM conversation_summaries
+               WHERE summary_text LIKE ? OR key_entities LIKE ? OR session_id LIKE ?
+               ORDER BY updated_at DESC LIMIT ?""",
+                (like, like, like, limit),
+            )
+            .fetchall()
+        )
+        return [dict(r) for r in rows]
+
     # -- Facts ---------------------------------------------------------------
 
     def insert_fact(self, fact: Fact) -> int:
