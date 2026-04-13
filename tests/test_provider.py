@@ -132,8 +132,8 @@ class TestProviderPrefetch:
 
 
 class TestProviderToolCall:
-    def _setup_provider(self, tmp_path):
-        config = KortexConfig(db_path=str(tmp_path / "test.db"))
+    def _setup_provider(self, tmp_path, **config_kwargs):
+        config = KortexConfig(db_path=str(tmp_path / "test.db"), **config_kwargs)
         p = KortexProvider(config=config)
         p.initialize("test-session", hermes_home=str(tmp_path))
         return p
@@ -165,6 +165,29 @@ class TestProviderToolCall:
                 user_text="deploy k8s",
             )
         )
+        result = p.handle_tool_call(
+            "kortex_search",
+            {
+                "action": "search",
+                "query": "kubernetes",
+            },
+        )
+        assert "Here's what I remember about 'kubernetes':" in result
+        assert "kubernetes deployment" in result
+        assert "source: episode #" in result
+        p.shutdown()
+
+    def test_search_action_json_format(self, tmp_path):
+        p = self._setup_provider(tmp_path, search_format="json")
+        from kortex.models import Episode
+
+        p._db.insert_episode(
+            Episode(
+                session_id="s1",
+                summary="kubernetes deployment",
+                user_text="deploy k8s",
+            )
+        )
         result = json.loads(
             p.handle_tool_call(
                 "kortex_search",
@@ -175,6 +198,49 @@ class TestProviderToolCall:
             )
         )
         assert len(result["episodes"]) >= 1
+        p.shutdown()
+
+    def test_search_action_includes_confidence_and_grouping(self, tmp_path):
+        p = self._setup_provider(tmp_path)
+        from kortex.models import Episode, Fact, Reflection
+
+        ep = Episode(
+            session_id="s1",
+            summary="deployment rollback discussion",
+            user_text="let's talk rollback",
+            timestamp=time.time() - (21 * 86400),
+        )
+        p._db.insert_episode(ep)
+        p._db.insert_fact(
+            Fact(
+                object_text="the user prefers staged rollouts with rollback checkpoints",
+                predicate="prefers",
+                confidence=0.82,
+                source_episode_id=ep.id,
+            )
+        )
+        p._db.insert_reflection(
+            Reflection(
+                text="deployment discussions benefit from explicit rollback steps",
+                kind="pattern",
+                confidence=0.65,
+                source_episode_id=ep.id,
+            )
+        )
+
+        result = p.handle_tool_call(
+            "kortex_search",
+            {
+                "action": "search",
+                "query": "rollback",
+            },
+        )
+        assert "Older related memories:" in result
+        assert "Durable facts:" in result
+        assert "Learned patterns:" in result
+        assert "very confident" in result
+        assert "fairly certain" in result
+        assert f"source episode #{ep.id}" in result
         p.shutdown()
 
     def test_list_facts_action(self, tmp_path):
@@ -324,6 +390,7 @@ class TestProviderConfigSchema:
         assert len(schema) >= 1
         keys = [s["key"] for s in schema]
         assert "db_path" in keys
+        assert "search_format" in keys
 
 
 class TestRegisterEntryPoint:

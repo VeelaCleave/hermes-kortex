@@ -69,6 +69,7 @@ class KortexConfig:
     auto_extract: bool = True  # extract facts/loops from turns automatically
     affect_calibration_min_samples: int = 20
     extraction_mode: str = "heuristic"
+    search_format: str = "narrative"
 
     # Identity
     soul_path: Optional[str] = None  # custom SOUL.md path (None = hermes default)
@@ -115,6 +116,7 @@ class KortexConfig:
                 "affect_calibration_min_samples", 20
             ),
             extraction_mode=data.get("extraction_mode", "heuristic"),
+            search_format=data.get("search_format", "narrative"),
             soul_path=data.get("soul_path"),
         )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +26,7 @@ from .recall import Recall
 from .reflect import process_reflections
 from .relationship import update_relationship
 from .summaries import build_conversation_summary
-from .time_utils import epoch_to_iso
+from .time_utils import epoch_to_display, epoch_to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -402,6 +403,13 @@ class KortexProvider(MemoryProvider):
                 "default": True,
                 "choices": [True, False],
             },
+            {
+                "key": "search_format",
+                "description": "Search tool response format",
+                "required": False,
+                "default": "narrative",
+                "choices": ["narrative", "json"],
+            },
         ]
 
     # -- Tool handlers -------------------------------------------------------
@@ -434,7 +442,94 @@ class KortexProvider(MemoryProvider):
                 for r in reflections
             ],
         }
-        return json.dumps(results)
+
+        if self._config.search_format == "json":
+            return json.dumps(results)
+
+        return self._format_search_narrative(query, episodes, facts, reflections)
+
+    def _format_search_narrative(
+        self,
+        query: str,
+        episodes: List[Episode],
+        facts: List[Fact],
+        reflections: List[Any],
+    ) -> str:
+        if not episodes and not facts and not reflections:
+            return f"I couldn't recall anything relevant to '{query}'."
+
+        lines = [
+            f"Here's what I remember about '{query}':",
+        ]
+
+        recent_episodes = []
+        older_episodes = []
+        now = time.time()
+        for episode in episodes:
+            age_days = max((now - episode.timestamp) / 86400, 0.0)
+            if age_days <= 14:
+                recent_episodes.append(episode)
+            else:
+                older_episodes.append(episode)
+
+        if recent_episodes:
+            lines.append("Recent memories:")
+            for episode in recent_episodes:
+                lines.append(
+                    "- "
+                    f"{episode.to_recall_text(now)} "
+                    f"(source: episode #{episode.id} on {epoch_to_display(episode.timestamp)})"
+                )
+
+        if older_episodes:
+            lines.append("Older related memories:")
+            for episode in older_episodes:
+                lines.append(
+                    "- "
+                    f"{episode.to_recall_text(now)} "
+                    f"(source: episode #{episode.id} on {epoch_to_display(episode.timestamp)})"
+                )
+
+        if facts:
+            lines.append("Durable facts:")
+            for fact in facts:
+                predicate = f"[{fact.predicate}] " if fact.predicate else ""
+                source = (
+                    f"source episode #{fact.source_episode_id}"
+                    if fact.source_episode_id
+                    else "no direct episode source"
+                )
+                lines.append(
+                    "- "
+                    f"I'm {self._confidence_phrase(fact.confidence)} that {predicate}{fact.object_text} "
+                    f"(fact #{fact.id}, {source})"
+                )
+
+        if reflections:
+            lines.append("Learned patterns:")
+            for reflection in reflections:
+                source = (
+                    f"source episode #{reflection.source_episode_id}"
+                    if reflection.source_episode_id
+                    else "no direct episode source"
+                )
+                lines.append(
+                    "- "
+                    f"I'm {self._confidence_phrase(reflection.confidence)} this pattern matters: "
+                    f"{reflection.text} ({reflection.kind}, reflection #{reflection.id}, {source})"
+                )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _confidence_phrase(confidence: float) -> str:
+        if confidence >= 0.8:
+            return "very confident"
+        if confidence >= 0.6:
+            return "fairly certain"
+        if confidence >= 0.4:
+            return "reasonably confident"
+        return "only loosely confident"
 
     def _handle_recall_episode(self, episode_id: Optional[int]) -> str:
         if episode_id is None:
