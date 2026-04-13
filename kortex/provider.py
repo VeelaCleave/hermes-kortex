@@ -27,6 +27,7 @@ from .reflect import process_reflections
 from .relationship import update_relationship
 from .summaries import build_conversation_summary
 from .time_utils import epoch_to_display, epoch_to_iso
+from .export import export_to_json, import_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,39 @@ KORTEX_IDENTITY_SCHEMA = {
             "min_confidence": {
                 "type": "number",
                 "description": "Minimum confidence for approve_all (default: 0.6)",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
+KORTEX_EXPORT_SCHEMA = {
+    "name": "kortex_export",
+    "description": (
+        "Export or import KORTEX memory as JSON backups.\n\n"
+        "Actions:\n"
+        "- export: Dump memories to JSON\n"
+        "- import: Restore memories from JSON"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["export", "import"]},
+            "user_id": {"type": "string", "description": "Optional user scope"},
+            "start": {"type": "string", "description": "Optional start timestamp"},
+            "end": {"type": "string", "description": "Optional end timestamp"},
+            "types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional memory types to include",
+            },
+            "payload": {
+                "type": "string",
+                "description": "JSON payload for import action",
+            },
+            "allow_override": {
+                "type": "boolean",
+                "description": "Allow schema mismatch on import",
             },
         },
         "required": ["action"],
@@ -332,10 +366,10 @@ class KortexProvider(MemoryProvider):
         threading.Thread(target=_bg, daemon=True).start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [KORTEX_SEARCH_SCHEMA, KORTEX_IDENTITY_SCHEMA]
+        return [KORTEX_SEARCH_SCHEMA, KORTEX_IDENTITY_SCHEMA, KORTEX_EXPORT_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
-        if tool_name not in {"kortex_search", "kortex_identity"}:
+        if tool_name not in {"kortex_search", "kortex_identity", "kortex_export"}:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
         if not self._db:
@@ -363,6 +397,9 @@ class KortexProvider(MemoryProvider):
                     return self._handle_status()
                 else:
                     return json.dumps({"error": f"Unknown action: {action}"})
+
+            if tool_name == "kortex_export":
+                return self._handle_export_call(args)
 
             return self._handle_identity_call(args)
         except Exception as exc:
@@ -693,6 +730,36 @@ class KortexProvider(MemoryProvider):
         if not self._consolidator:
             return json.dumps({"error": "KORTEX consolidator not initialized"})
         return json.dumps(self._consolidator.consolidate(limit=limit))
+
+    def _handle_export_call(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "KORTEX not initialized"})
+
+        action = args.get("action", "")
+        target_user = args.get("user_id", self._user_id)
+
+        if action == "export":
+            return export_to_json(
+                self._db,
+                user_id=target_user,
+                start=args.get("start"),
+                end=args.get("end"),
+                memory_types=args.get("types"),
+            )
+
+        if action == "import":
+            payload = args.get("payload")
+            if not payload:
+                return json.dumps({"error": "payload required for import"})
+            return json.dumps(
+                import_from_json(
+                    self._db,
+                    payload,
+                    allow_override=bool(args.get("allow_override", False)),
+                )
+            )
+
+        return json.dumps({"error": f"Unknown export action: {action}"})
 
     def _handle_identity_call(self, args: Dict[str, Any]) -> str:
         if not self._promoter:
