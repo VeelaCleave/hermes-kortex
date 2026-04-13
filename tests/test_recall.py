@@ -1,5 +1,6 @@
 import time
 
+from kortex.linker import Linker
 from kortex.models import Episode
 from kortex.recall import Recall
 
@@ -212,6 +213,35 @@ class TestEpisodeRanking:
         assert recall._episode_strength(
             boosted, time.time()
         ) > recall._episode_strength(ep, time.time())
+
+    def test_graph_expanded_recall_merges_entity_related_episode(
+        self, kortex_db, kortex_config
+    ):
+        ep1 = Episode(
+            session_id="s1",
+            summary="rollout issue from yesterday",
+            entities="Amelia",
+            topics="rollout,incident,launch",
+            salience=0.8,
+            timestamp=time.time() - 3600,
+        )
+        ep2 = Episode(
+            session_id="s1",
+            summary="follow-up mitigation plan",
+            topics="rollout,incident,launch",
+            salience=0.5,
+            timestamp=time.time() - 1800,
+        )
+        kortex_db.insert_episode(ep1)
+        kortex_db.insert_episode(ep2)
+
+        linker = Linker(kortex_db)
+        linker.link_related_episodes(ep2)
+        recall_with_graph = Recall(kortex_db, kortex_config, linker=linker)
+
+        ctx = recall_with_graph.build_context("What did Amelia say about rollout?")
+        assert "rollout issue from yesterday" in ctx
+        assert "follow-up mitigation plan" in ctx
 
 
 class TestRecallText:

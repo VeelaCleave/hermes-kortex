@@ -8,14 +8,15 @@ Packs into a hard token budget with quota-based allocation per section.
 
 from __future__ import annotations
 
-import math
 import logging
+import math
 import re
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from .config import KortexConfig
 from .calibrate import calibrate_affect
 from .db import KortexDB
+from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
 from .time_utils import epoch_to_display, now_epoch
 
@@ -27,9 +28,12 @@ CHARS_PER_TOKEN = 4
 class Recall:
     """Retrieves and packs memory context for injection."""
 
-    def __init__(self, db: KortexDB, config: KortexConfig):
+    def __init__(
+        self, db: KortexDB, config: KortexConfig, linker: Optional[Linker] = None
+    ):
         self._db = db
         self._config = config
+        self._linker = linker
 
     def build_context(self, query: str, session_id: str = "") -> str:
         sections = []
@@ -62,9 +66,14 @@ class Recall:
             budget_used += self._estimate_tokens(facts_text)
 
         episodes_budget = self._config.budget.get("episodic_memories", 800)
+        graph_budget = self._config.budget.get("graph_memories", 0)
         fact_ids = {fact.id for fact in selected_facts if fact.id is not None}
         episodes_text = self._build_episodes_section(
-            query, session_id, episodes_budget, existing_fact_ids=fact_ids
+            query,
+            session_id,
+            episodes_budget,
+            graph_budget,
+            existing_fact_ids=fact_ids,
         )
         if episodes_text:
             sections.append(episodes_text)
@@ -156,6 +165,7 @@ class Recall:
         query: str,
         session_id: str,
         budget: int,
+        graph_budget: int,
         existing_fact_ids: Optional[Set[int]] = None,
     ) -> str:
         now = now_epoch()
@@ -169,6 +179,14 @@ class Recall:
         else:
             search_result_ids = set()
 
+        graph_scores = self._graph_episode_scores(query, graph_budget)
+        graph_ranked_ids = [
+            episode_id
+            for episode_id, _score in sorted(
+                graph_scores.items(), key=lambda item: item[1], reverse=True
+            )
+        ]
+
         salient = self._db.get_salient_episodes(
             min_salience=self._config.salience_threshold,
             limit=10,
@@ -180,11 +198,27 @@ class Recall:
         seen_ids = {e.id for e in candidates}
         candidates.extend(e for e in recent if e.id not in seen_ids)
 
+        graph_quota = self._graph_candidate_limit(graph_budget)
+        graph_added = 0
+        seen_ids = {e.id for e in candidates}
+        for episode_id in graph_ranked_ids:
+            if graph_added >= graph_quota or episode_id in seen_ids:
+                continue
+            episode = self._db.get_episode(episode_id)
+            if not episode:
+                continue
+            candidates.append(episode)
+            seen_ids.add(episode_id)
+            graph_added += 1
+
+        fusion_scores = self._rank_fusion(graph_ranked_ids)
+
         scored = []
         for ep in candidates:
             allows_cold = (
                 temporal_window_days is not None
                 or self._is_explicit_episode_match(query, ep)
+                or ep.id in graph_scores
             )
             if (
                 self._memory_tier(self._episode_strength(ep, now)) == "cold"
@@ -198,6 +232,7 @@ class Recall:
                 session_id=session_id,
                 temporal_window_days=temporal_window_days,
             )
+            score += fusion_scores.get(ep.id, 0.0)
             scored.append((score, ep))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -265,6 +300,81 @@ class Recall:
                     return lines
 
         return lines
+
+    def _graph_episode_scores(self, query: str, graph_budget: int) -> Dict[int, float]:
+        if not query or not self._linker:
+            return {}
+
+        seed_entity_ids = self._query_entity_ids(query)
+        if not seed_entity_ids:
+            return {}
+
+        traversed = self._linker.traverse(
+            seed_entity_ids,
+            max_hops=self._config.graph_max_hops,
+            max_results=max(self._config.graph_expansion_limit * 4, 12),
+            hop_decay=self._config.graph_decay_factor,
+        )
+        if not traversed:
+            return {}
+
+        episode_scores: Dict[int, float] = {}
+        graph_limit = max(self._graph_candidate_limit(graph_budget), 1)
+        for node in traversed:
+            node_type = node["node_type"]
+            node_id = node["node_id"]
+            score = node["score"]
+            if node_type == "episode":
+                episode_scores[node_id] = max(score, episode_scores.get(node_id, 0.0))
+                continue
+            if node_type == "fact":
+                for episode_id in self._linker.get_fact_episodes(node_id):
+                    episode_scores[episode_id] = max(
+                        score * 0.85, episode_scores.get(episode_id, 0.0)
+                    )
+
+        return dict(
+            sorted(episode_scores.items(), key=lambda item: item[1], reverse=True)[
+                : self._config.graph_expansion_limit + graph_limit
+            ]
+        )
+
+    def _query_entity_ids(self, query: str) -> List[int]:
+        if not self._linker or not query:
+            return []
+
+        tokens = [
+            token
+            for token in re.findall(r"[A-Za-z0-9_]+", query.lower())
+            if len(token) > 2
+        ]
+        seen = set()
+        entity_ids: List[int] = []
+        for size in (3, 2, 1):
+            if len(tokens) < size:
+                continue
+            for idx in range(len(tokens) - size + 1):
+                candidate = " ".join(tokens[idx : idx + size])
+                entity_id = self._linker._entity_id(candidate)
+                if entity_id in seen:
+                    continue
+                if not self._db.get_links_from("entity", entity_id, limit=1):
+                    continue
+                seen.add(entity_id)
+                entity_ids.append(entity_id)
+        return entity_ids
+
+    @staticmethod
+    def _rank_fusion(graph_episode_ids: List[int]) -> Dict[int, float]:
+        fused: Dict[int, float] = {}
+        for rank, episode_id in enumerate(graph_episode_ids, start=1):
+            fused[episode_id] = 0.2 / rank
+        return fused
+
+    def _graph_candidate_limit(self, graph_budget: int) -> int:
+        if graph_budget <= 0:
+            return 0
+        return min(self._config.graph_expansion_limit, max(1, graph_budget // 75))
 
     def _build_loops_section(self, budget: int) -> str:
         loops = self._db.get_open_loops(limit=self._config.max_loops_per_recall)

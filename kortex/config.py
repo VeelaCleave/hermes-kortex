@@ -15,7 +15,8 @@ DEFAULT_BUDGET = {
     "relationship_state": 200,  # 150-250 tokens
     "conversation_summaries": 100,
     "stable_facts": 350,  # 300-400 tokens
-    "episodic_memories": 600,  # 600-800 tokens
+    "episodic_memories": 450,  # reserve space for graph-expanded recall
+    "graph_memories": 150,
     "open_loops": 200,  # 150-250 tokens
     "reflections": 200,  # 150-250 tokens
     "reserve": 150,  # 100-200 tokens
@@ -43,6 +44,9 @@ class KortexConfig:
     reflection_decay_rate: float = 0.08
     cold_memory_threshold: float = 0.1
     warm_memory_threshold: float = 0.3
+    graph_max_hops: int = 2
+    graph_decay_factor: float = 0.5
+    graph_expansion_limit: int = 6
 
     # Facts
     max_facts_per_recall: int = 6
@@ -94,6 +98,9 @@ class KortexConfig:
             reflection_decay_rate=data.get("reflection_decay_rate", 0.08),
             cold_memory_threshold=data.get("cold_memory_threshold", 0.1),
             warm_memory_threshold=data.get("warm_memory_threshold", 0.3),
+            graph_max_hops=data.get("graph_max_hops", 2),
+            graph_decay_factor=data.get("graph_decay_factor", 0.5),
+            graph_expansion_limit=data.get("graph_expansion_limit", 6),
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
             max_loops_per_recall=data.get("max_loops_per_recall", 3),

@@ -174,7 +174,7 @@ class KortexProvider(MemoryProvider):
             auxiliary_client=kwargs.get("auxiliary_client"),
         )
         self._linker = Linker(self._db)
-        self._recall = Recall(self._db, self._config)
+        self._recall = Recall(self._db, self._config, linker=self._linker)
         self._promoter = Promoter(self._db, soul_path=self._config.soul_path)
         self._consolidator = Consolidator(self._db, self._linker, self._config)
 
