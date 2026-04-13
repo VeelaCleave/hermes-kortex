@@ -130,6 +130,7 @@ class Recall:
             seen_ids = {f.id for f in facts}
             facts.extend(f for f in top_facts if f.id not in seen_ids)
 
+        facts = [fact for fact in facts if fact.contradiction_status != "contradicted"]
         return facts[: self._config.max_facts_per_recall]
 
     def _build_facts_section(self, facts: List[Fact], budget: int) -> str:

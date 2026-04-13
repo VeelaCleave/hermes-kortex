@@ -12,11 +12,13 @@ Stage 3+: LLM-powered extraction will be added as an optional enhancer.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 from typing import List, Optional, Tuple
 
 from .db import KortexDB
+from .linker import Linker
 from .models import Episode, Fact, OpenLoop
 from .time_utils import now_epoch
 
@@ -203,6 +205,7 @@ class Ingestor:
 
     def __init__(self, db: KortexDB):
         self._db = db
+        self._linker = Linker(db)
         self._lock = threading.Lock()
         self._turn_counter: dict[str, int] = {}
 
@@ -297,7 +300,7 @@ class Ingestor:
                         source_episode_id=episode_id,
                     )
                     new_fact.id = self._db.insert_fact(new_fact)
-                    self._db.supersede_fact(existing.id, new_fact.id)
+                    self._apply_fact_conflict(existing, new_fact)
                     results.append(new_fact)
                     logger.debug(
                         "KORTEX fact superseded: [%s] '%s' -> '%s'",
@@ -442,6 +445,67 @@ class Ingestor:
             pass
 
         return None
+
+    def _apply_fact_conflict(self, existing: Fact, new_fact: Fact) -> None:
+        if not existing.id or not new_fact.id:
+            return
+
+        contradictory = self._facts_contradict(
+            existing.predicate, existing.object_text, new_fact.object_text
+        )
+        self._db.supersede_fact(existing.id, new_fact.id)
+        self._linker.link_superseded_facts(existing.id, new_fact.id)
+        if contradictory:
+            self._db.mark_fact_contradiction(existing.id, new_fact.id)
+            self._linker.link_contradicting_facts(existing.id, new_fact.id)
+
+    @classmethod
+    def _facts_contradict(cls, predicate: str, existing: str, new: str) -> bool:
+        existing_lower = existing.lower()
+        new_lower = new.lower()
+
+        negation_markers = (
+            "no longer",
+            "not anymore",
+            "stopped",
+            "quit",
+            "instead",
+            "switched",
+            "now",
+        )
+        if any(marker in new_lower for marker in negation_markers):
+            return True
+
+        if predicate in {
+            "uses",
+            "decision",
+            "project_uses",
+            "works_at",
+            "lives_in",
+            "named",
+        }:
+            if existing_lower != new_lower and cls._facts_are_related(existing, new):
+                return True
+
+        if predicate == "prefers":
+            existing_terms = set(existing_lower.split())
+            new_terms = set(new_lower.split())
+            if existing_terms and new_terms and existing_terms.isdisjoint(new_terms):
+                return True
+
+        existing_version = cls._extract_version(existing_lower)
+        new_version = cls._extract_version(new_lower)
+        if existing_version and new_version and existing_version != new_version:
+            return True
+
+        return False
+
+    @staticmethod
+    def _extract_version(text: str) -> Optional[Tuple[int, ...]]:
+        match = re.search(r"\b(\d+(?:\.\d+)+)\b", text)
+        if not match:
+            return None
+        return tuple(int(part) for part in match.group(1).split("."))
 
     @staticmethod
     def _facts_are_equivalent(existing: str, new: str) -> bool:

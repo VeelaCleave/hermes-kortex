@@ -119,6 +119,22 @@ class TestFactDeduplication:
         if len(uses_facts) == 1:
             assert "3.12" in uses_facts[0].object_text
 
+        superseded = kortex_db.get_facts_superseded_by(uses_facts[0].id)
+        if superseded:
+            assert superseded[0].valid_to is not None
+            assert superseded[0].contradiction_status == "contradicted"
+
+    def test_contradiction_links_created(self, ingestor, kortex_db):
+        ep1 = ingestor.ingest_turn("a", "b", session_id="s1")
+        ingestor.extract_facts("I use Python 3.10 for development", ep1.id)
+
+        ep2 = ingestor.ingest_turn("c", "d", session_id="s1")
+        facts = ingestor.extract_facts("I use Python 3.12 for development", ep2.id)
+
+        old = kortex_db.get_facts_superseded_by(facts[0].id)[0]
+        assert kortex_db.link_exists("fact", old.id, "fact", facts[0].id, "contradicts")
+        assert kortex_db.link_exists("fact", facts[0].id, "fact", old.id, "contradicts")
+
     def test_completely_different_facts_coexist(self, ingestor, kortex_db):
         ep1 = ingestor.ingest_turn("a", "b", session_id="s1")
         ingestor.extract_facts("I prefer dark mode", ep1.id)

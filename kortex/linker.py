@@ -77,6 +77,13 @@ class Linker:
             return
         self._create_link("fact", old_fact_id, "fact", new_fact_id, "supersedes")
 
+    def link_contradicting_facts(self, old_fact_id: int, new_fact_id: int) -> None:
+        """Create fact↔fact contradiction links."""
+        if old_fact_id <= 0 or new_fact_id <= 0:
+            return
+        self._create_link("fact", old_fact_id, "fact", new_fact_id, "contradicts")
+        self._create_link("fact", new_fact_id, "fact", old_fact_id, "contradicts")
+
     def get_related_episodes(self, episode_id: int, limit: int = 5) -> List[int]:
         """Get episode IDs linked to this episode."""
         return [

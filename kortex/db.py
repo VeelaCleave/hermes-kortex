@@ -1115,10 +1115,20 @@ class KortexDB:
             conn.execute("UPDATE facts SET last_seen=? WHERE id=?", (now, fact_id))
 
     def supersede_fact(self, old_id: int, new_id: int) -> None:
+        now = now_epoch()
         with self._tx() as conn:
             conn.execute(
-                "UPDATE facts SET status='superseded', superseded_by=? WHERE id=?",
-                (new_id, old_id),
+                """UPDATE facts
+                   SET status='superseded', superseded_by=?, valid_to=?, contradiction_status='superseded'
+                   WHERE id=?""",
+                (new_id, now, old_id),
+            )
+
+    def mark_fact_contradiction(self, old_id: int, new_id: int) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE facts SET contradiction_status='contradicted' WHERE id IN (?, ?)",
+                (old_id, new_id),
             )
 
     def get_facts_by_predicate(

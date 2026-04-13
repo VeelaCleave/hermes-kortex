@@ -187,6 +187,9 @@ class TestFactCRUD:
         active = kortex_db.get_active_facts()
         assert len(active) == 1
         assert active[0].object_text == "uses Python 3.12"
+        old_row = kortex_db.get_fact(old.id)
+        assert old_row.valid_to is not None
+        assert old_row.contradiction_status == "superseded"
 
     def test_update_confidence(self, kortex_db):
         fact = Fact(object_text="test", confidence=0.5)
