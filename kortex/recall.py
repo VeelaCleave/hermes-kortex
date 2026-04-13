@@ -56,11 +56,17 @@ class Recall:
             sections.append(episodes_text)
             budget_used += self._estimate_tokens(episodes_text)
 
-        loops_budget = self._config.budget.get("open_loops", 250)
+        loops_budget = self._config.budget.get("open_loops", 200)
         loops_text = self._build_loops_section(loops_budget)
         if loops_text:
             sections.append(loops_text)
             budget_used += self._estimate_tokens(loops_text)
+
+        reflections_budget = self._config.budget.get("reflections", 200)
+        reflections_text = self._build_reflections_section(reflections_budget)
+        if reflections_text:
+            sections.append(reflections_text)
+            budget_used += self._estimate_tokens(reflections_text)
 
         if not sections:
             return ""
@@ -149,6 +155,32 @@ class Recall:
         for loop in loops:
             kind_label = loop.kind.replace("_", " ")
             lines.append(f"- [{kind_label}] {loop.text}")
+
+        text = "\n".join(lines)
+        return self._trim_to_budget(text, budget)
+
+    def _build_reflections_section(self, budget: int) -> str:
+        reflections = self._db.get_high_confidence_reflections(
+            min_confidence=self._config.reflection_confidence_threshold,
+            limit=self._config.max_reflections_per_recall,
+        )
+        if not reflections:
+            return ""
+
+        _KIND_LABELS = {
+            "mistake": "Avoid",
+            "pattern": "Works well",
+            "preference": "User prefers",
+            "style": "Style note",
+        }
+
+        lines = ["Learned behaviors:"]
+        for ref in reflections:
+            label = _KIND_LABELS.get(ref.kind, ref.kind.title())
+            reinforced = (
+                f" (x{ref.reinforcement_count})" if ref.reinforcement_count > 1 else ""
+            )
+            lines.append(f"- [{label}]{reinforced} {ref.text}")
 
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)

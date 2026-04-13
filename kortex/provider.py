@@ -18,6 +18,7 @@ from .affect import score_affect
 from .ingest import Ingestor
 from .models import AffectSignal, Episode, Fact, OpenLoop, RelationshipState
 from .recall import Recall
+from .reflect import process_reflections
 from .relationship import update_relationship
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,11 @@ class KortexProvider(MemoryProvider):
                     days_since = delta.total_seconds() / 86400
                 updated_rel = update_relationship(affect, rel, days_since)
                 self._db.upsert_relationship(updated_rel)
+
+                if self._config.auto_extract:
+                    process_reflections(
+                        self._db, user_content, assistant_content, affect, ep.id
+                    )
 
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",

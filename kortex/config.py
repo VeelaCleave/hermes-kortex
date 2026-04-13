@@ -13,9 +13,10 @@ from typing import Any, Dict, Optional
 # Budget allocation for context injection (~2000 tokens total)
 DEFAULT_BUDGET = {
     "relationship_state": 200,  # 150-250 tokens
-    "stable_facts": 400,  # 300-500 tokens
-    "episodic_memories": 800,  # 700-900 tokens
-    "open_loops": 250,  # 200-300 tokens
+    "stable_facts": 350,  # 300-400 tokens
+    "episodic_memories": 700,  # 600-800 tokens
+    "open_loops": 200,  # 150-250 tokens
+    "reflections": 200,  # 150-250 tokens
     "reserve": 150,  # 100-200 tokens
 }
 
@@ -38,6 +39,10 @@ class KortexConfig:
 
     # Open loops
     max_loops_per_recall: int = 3
+
+    # Reflections
+    max_reflections_per_recall: int = 3
+    reflection_confidence_threshold: float = 0.4
 
     # Context budget (tokens per section)
     budget: Dict[str, int] = field(default_factory=lambda: DEFAULT_BUDGET.copy())
@@ -67,6 +72,10 @@ class KortexConfig:
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
             max_loops_per_recall=data.get("max_loops_per_recall", 3),
+            max_reflections_per_recall=data.get("max_reflections_per_recall", 3),
+            reflection_confidence_threshold=data.get(
+                "reflection_confidence_threshold", 0.4
+            ),
             budget=merged_budget,
             total_budget=data.get("total_budget", 1800),
             auto_extract=data.get("auto_extract", True),

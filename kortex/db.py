@@ -697,6 +697,71 @@ class KortexDB:
                 (confidence_boost, now, reflection_id),
             )
 
+    def get_high_confidence_reflections(
+        self, min_confidence: float = 0.5, limit: int = 10
+    ) -> List[Reflection]:
+        """Get reflections above a confidence threshold, ordered by confidence."""
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM reflections WHERE confidence >= ? ORDER BY confidence DESC LIMIT ?",
+                (min_confidence, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_reflection(r) for r in rows]
+
+    def decay_stale_reflections(
+        self, days_threshold: float = 30.0, decay_rate: float = 0.05
+    ) -> int:
+        """Reduce confidence of reflections not reinforced recently. Returns count."""
+        cutoff = datetime.now(timezone.utc).timestamp() - (days_threshold * 86400)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """UPDATE reflections
+                   SET confidence = MAX(0.05, confidence - ?)
+                   WHERE last_reinforced < ? AND confidence > 0.05""",
+                (decay_rate, cutoff_iso),
+            )
+            return cur.rowcount
+
+    def get_identity_deltas(
+        self, applied: Optional[bool] = None, limit: int = 10
+    ) -> List["IdentityDelta"]:
+        """Get identity deltas, optionally filtered by applied status."""
+        from .models import IdentityDelta
+
+        if applied is not None:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM identity_deltas WHERE applied=? ORDER BY created_at DESC LIMIT ?",
+                    (int(applied), limit),
+                )
+                .fetchall()
+            )
+        else:
+            rows = (
+                self._get_conn()
+                .execute(
+                    "SELECT * FROM identity_deltas ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            )
+        return [
+            IdentityDelta(
+                id=r["id"],
+                text=r["text"],
+                confidence=r["confidence"],
+                source_episode_id=r["source_episode_id"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+                applied=bool(r["applied"]),
+            )
+            for r in rows
+        ]
+
     # -- Relationship State --------------------------------------------------
 
     def get_relationship(self, user_id: str = "default") -> RelationshipState:
