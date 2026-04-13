@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import KortexConfig, load_kortex_config
+from .consolidate import Consolidator
 from .db import KortexDB
 from .affect import score_affect
 from .ingest import Ingestor
@@ -39,6 +40,7 @@ KORTEX_SEARCH_SCHEMA = {
         "- list_facts: List known durable facts\n"
         "- list_loops: List open commitments/threads\n"
         "- list_conversations: List stored whole-conversation summaries\n"
+        "- consolidate: Merge old raw episodes into summary episodes\n"
         "- status: Show memory statistics"
     ),
     "parameters": {
@@ -52,6 +54,7 @@ KORTEX_SEARCH_SCHEMA = {
                     "list_facts",
                     "list_loops",
                     "list_conversations",
+                    "consolidate",
                     "status",
                 ],
             },
@@ -140,6 +143,7 @@ class KortexProvider(MemoryProvider):
         self._linker: Optional[Linker] = None
         self._recall: Optional[Recall] = None
         self._promoter: Optional[Promoter] = None
+        self._consolidator: Optional[Consolidator] = None
         self._session_id: str = ""
         self._hermes_home: str = ""
         self._prefetch_cache: str = ""
@@ -167,6 +171,7 @@ class KortexProvider(MemoryProvider):
         self._linker = Linker(self._db)
         self._recall = Recall(self._db, self._config)
         self._promoter = Promoter(self._db, soul_path=self._config.soul_path)
+        self._consolidator = Consolidator(self._db, self._linker, self._config)
 
         logger.info("KORTEX initialized (session=%s, db=%s)", session_id, db_path)
 
@@ -257,6 +262,9 @@ class KortexProvider(MemoryProvider):
                     )
                     self._linker.link_related_episodes(ep)
 
+                if self._consolidator:
+                    self._consolidator.maybe_consolidate()
+
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
                     ep.turn_index,
@@ -295,6 +303,8 @@ class KortexProvider(MemoryProvider):
                     return self._handle_list_loops(limit)
                 elif action == "list_conversations":
                     return self._handle_list_conversations(limit)
+                elif action == "consolidate":
+                    return self._handle_consolidate(limit)
                 elif action == "status":
                     return self._handle_status()
                 else:
@@ -474,6 +484,7 @@ class KortexProvider(MemoryProvider):
 
     def _handle_status(self) -> str:
         total_episodes = self._db.count_episodes()
+        unconsolidated_raw_episodes = self._db.count_unconsolidated_episodes()
         facts = self._db.get_active_facts(limit=1000)
         loops = self._db.get_open_loops(limit=1000)
         reflections = self._db.get_reflections(limit=1000)
@@ -483,6 +494,8 @@ class KortexProvider(MemoryProvider):
         return json.dumps(
             {
                 "total_episodes": total_episodes,
+                "active_episodes": unconsolidated_raw_episodes,
+                "unconsolidated_raw_episodes": unconsolidated_raw_episodes,
                 "active_facts": len(facts),
                 "open_loops": len(loops),
                 "reflections": len(reflections),
@@ -504,6 +517,11 @@ class KortexProvider(MemoryProvider):
                 ],
             }
         )
+
+    def _handle_consolidate(self, limit: Optional[int]) -> str:
+        if not self._consolidator:
+            return json.dumps({"error": "KORTEX consolidator not initialized"})
+        return json.dumps(self._consolidator.consolidate(limit=limit))
 
     def _handle_identity_call(self, args: Dict[str, Any]) -> str:
         if not self._promoter:

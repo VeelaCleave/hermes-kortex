@@ -824,36 +824,47 @@ class KortexDB:
         return self._row_to_episode(row) if row else None
 
     def get_recent_episodes(
-        self, limit: int = 10, session_id: Optional[str] = None
+        self,
+        limit: int = 10,
+        session_id: Optional[str] = None,
+        include_consolidated: bool = False,
     ) -> List[Episode]:
+        filters = []
+        params: List[Any] = []
+        if not include_consolidated:
+            filters.append("is_consolidated=0")
         if session_id:
-            rows = (
-                self._get_conn()
-                .execute(
-                    "SELECT * FROM episodes WHERE session_id=? ORDER BY timestamp DESC LIMIT ?",
-                    (session_id, limit),
-                )
-                .fetchall()
+            filters.append("session_id=?")
+            params.append(session_id)
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        rows = (
+            self._get_conn()
+            .execute(
+                f"SELECT * FROM episodes {where} ORDER BY timestamp DESC LIMIT ?",
+                tuple(params),
             )
-        else:
-            rows = (
-                self._get_conn()
-                .execute(
-                    "SELECT * FROM episodes ORDER BY timestamp DESC LIMIT ?", (limit,)
-                )
-                .fetchall()
-            )
+            .fetchall()
+        )
         return [self._row_to_episode(r) for r in rows]
 
-    def search_episodes(self, query: str, limit: int = 10) -> List[Episode]:
+    def search_episodes(
+        self, query: str, limit: int = 10, include_consolidated: bool = False
+    ) -> List[Episode]:
+        consolidated_clause = (
+            "AND e.is_consolidated=0" if not include_consolidated else ""
+        )
         rows = (
             self._get_conn()
             .execute(
                 """SELECT e.* FROM episodes e
                JOIN episodes_fts f ON e.id = f.rowid
-               WHERE episodes_fts MATCH ?
-               ORDER BY rank
-               LIMIT ?""",
+                WHERE episodes_fts MATCH ?
+               """
+                + consolidated_clause
+                + """
+                ORDER BY rank
+                LIMIT ?""",
                 (query, limit),
             )
             .fetchall()
@@ -861,13 +872,21 @@ class KortexDB:
         return [self._row_to_episode(r) for r in rows]
 
     def get_salient_episodes(
-        self, min_salience: float = 0.5, limit: int = 10
+        self,
+        min_salience: float = 0.5,
+        limit: int = 10,
+        include_consolidated: bool = False,
     ) -> List[Episode]:
+        filters = ["salience >= ?"]
+        params: List[Any] = [min_salience]
+        if not include_consolidated:
+            filters.append("is_consolidated=0")
+        params.append(limit)
         rows = (
             self._get_conn()
             .execute(
-                "SELECT * FROM episodes WHERE salience >= ? ORDER BY salience DESC LIMIT ?",
-                (min_salience, limit),
+                f"SELECT * FROM episodes WHERE {' AND '.join(filters)} ORDER BY salience DESC LIMIT ?",
+                tuple(params),
             )
             .fetchall()
         )
@@ -893,6 +912,44 @@ class KortexDB:
             params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
         return [self._row_to_episode(r) for r in rows]
+
+    def count_unconsolidated_episodes(self) -> int:
+        return (
+            self._get_conn()
+            .execute(
+                "SELECT COUNT(*) FROM episodes WHERE is_consolidated=0 AND raw_preserved=1"
+            )
+            .fetchone()[0]
+        )
+
+    def get_unconsolidated_episodes(
+        self, limit: int = 100, session_id: Optional[str] = None
+    ) -> List[Episode]:
+        query = "SELECT * FROM episodes WHERE is_consolidated=0 AND raw_preserved=1"
+        params: List[Any] = []
+        if session_id:
+            query += " AND session_id=?"
+            params.append(session_id)
+        query += " ORDER BY timestamp ASC LIMIT ?"
+        params.append(limit)
+        rows = self._get_conn().execute(query, tuple(params)).fetchall()
+        return [self._row_to_episode(r) for r in rows]
+
+    def mark_episodes_consolidated(
+        self, episode_ids: List[int], summary_episode_id: int
+    ) -> int:
+        valid_ids = [episode_id for episode_id in episode_ids if episode_id > 0]
+        if not valid_ids or summary_episode_id <= 0:
+            return 0
+        placeholders = ",".join("?" for _ in valid_ids)
+        with self._tx() as conn:
+            cur = conn.execute(
+                f"""UPDATE episodes
+                   SET is_consolidated=1, consolidated_into=?
+                   WHERE id IN ({placeholders})""",
+                (summary_episode_id, *valid_ids),
+            )
+            return cur.rowcount
 
     # -- Conversation summaries ---------------------------------------------
 
@@ -1448,7 +1505,7 @@ class KortexDB:
         src_type: str,
         src_id: int,
         relation: str = None,
-        limit: int = 20,
+        limit: Optional[int] = 20,
     ) -> List[dict]:
         query = (
             "SELECT dst_type, dst_id, relation, weight FROM entity_links "
@@ -1458,8 +1515,10 @@ class KortexDB:
         if relation:
             query += " AND relation=?"
             params.append(relation)
-        query += " ORDER BY weight DESC, id DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY weight DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
         return [
             {
@@ -1476,7 +1535,7 @@ class KortexDB:
         dst_type: str,
         dst_id: int,
         relation: str = None,
-        limit: int = 20,
+        limit: Optional[int] = 20,
     ) -> List[dict]:
         query = (
             "SELECT src_type, src_id, relation, weight FROM entity_links "
@@ -1486,8 +1545,10 @@ class KortexDB:
         if relation:
             query += " AND relation=?"
             params.append(relation)
-        query += " ORDER BY weight DESC, id DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY weight DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
         return [
             {

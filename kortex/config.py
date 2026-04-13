@@ -34,6 +34,8 @@ class KortexConfig:
     max_conversation_summaries_per_recall: int = 2
     salience_threshold: float = 0.2
     recency_decay_days: float = 30.0  # half-life in days for recency scoring
+    consolidation_threshold: int = 200
+    consolidation_batch_size: int = 100
 
     # Facts
     max_facts_per_recall: int = 6
@@ -74,6 +76,8 @@ class KortexConfig:
             ),
             salience_threshold=data.get("salience_threshold", 0.2),
             recency_decay_days=data.get("recency_decay_days", 30.0),
+            consolidation_threshold=data.get("consolidation_threshold", 200),
+            consolidation_batch_size=data.get("consolidation_batch_size", 100),
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
             max_loops_per_recall=data.get("max_loops_per_recall", 3),
