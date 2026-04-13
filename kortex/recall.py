@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Set
 
 from .config import KortexConfig
 from .calibrate import calibrate_affect
-from .db import KortexDB
+from .db import DEFAULT_USER_ID, KortexDB
 from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
 from .time_utils import epoch_to_display, now_epoch
@@ -35,22 +35,26 @@ class Recall:
         self._config = config
         self._linker = linker
 
-    def build_context(self, query: str, session_id: str = "") -> str:
+    def build_context(
+        self, query: str, session_id: str = "", user_id: str = DEFAULT_USER_ID
+    ) -> str:
         sections = []
         budget_used = 0
-        selected_facts = self._select_facts(query)
+        selected_facts = self._select_facts(query, user_id=user_id)
 
         summaries_budget = self._config.budget.get("conversation_summaries", 250)
         summaries_text = self._build_conversation_summaries_section(
-            query, session_id, summaries_budget
+            query, session_id, summaries_budget, user_id=user_id
         )
         if summaries_text:
             sections.append(summaries_text)
             budget_used += self._estimate_tokens(summaries_text)
 
-        relationship = self._db.get_relationship()
+        relationship = self._db.get_relationship(user_id=user_id)
         rel_text = relationship.to_compact_text()
-        emotional_trajectory = self._build_emotional_trajectory(session_id)
+        emotional_trajectory = self._build_emotional_trajectory(
+            session_id, user_id=user_id
+        )
         if emotional_trajectory:
             rel_text = f"{rel_text}\n{emotional_trajectory}"
         rel_budget = self._config.budget.get("relationship_state", 200)
@@ -73,6 +77,7 @@ class Recall:
             session_id,
             episodes_budget,
             graph_budget,
+            user_id=user_id,
             existing_fact_ids=fact_ids,
         )
         if episodes_text:
@@ -80,13 +85,15 @@ class Recall:
             budget_used += self._estimate_tokens(episodes_text)
 
         loops_budget = self._config.budget.get("open_loops", 200)
-        loops_text = self._build_loops_section(loops_budget)
+        loops_text = self._build_loops_section(loops_budget, user_id=user_id)
         if loops_text:
             sections.append(loops_text)
             budget_used += self._estimate_tokens(loops_text)
 
         reflections_budget = self._config.budget.get("reflections", 200)
-        reflections_text = self._build_reflections_section(reflections_budget)
+        reflections_text = self._build_reflections_section(
+            reflections_budget, user_id=user_id
+        )
         if reflections_text:
             sections.append(reflections_text)
             budget_used += self._estimate_tokens(reflections_text)
@@ -104,16 +111,23 @@ class Recall:
         return full
 
     def _build_conversation_summaries_section(
-        self, query: str, session_id: str, budget: int
+        self,
+        query: str,
+        session_id: str,
+        budget: int,
+        user_id: str = DEFAULT_USER_ID,
     ) -> str:
         if query:
             summaries = self._db.search_conversation_summaries(
-                query, limit=self._config.max_conversation_summaries_per_recall
+                query,
+                limit=self._config.max_conversation_summaries_per_recall,
+                user_id=user_id,
             )
         else:
             summaries = self._db.list_conversation_summaries(
                 limit=self._config.max_conversation_summaries_per_recall,
                 session_id=session_id or None,
+                user_id=user_id,
             )
 
         if not summaries:
@@ -125,18 +139,19 @@ class Recall:
 
         return self._trim_to_budget("\n".join(lines), budget)
 
-    def _select_facts(self, query: str) -> List[Fact]:
+    def _select_facts(self, query: str, user_id: str = DEFAULT_USER_ID) -> List[Fact]:
         facts: List[Fact] = []
 
         if query:
             facts = self._db.search_facts(
-                query, limit=self._config.max_facts_per_recall
+                query, limit=self._config.max_facts_per_recall, user_id=user_id
             )
 
         if len(facts) < self._config.max_facts_per_recall:
             top_facts = self._db.get_active_facts(
                 subject_type="user",
                 limit=self._config.max_facts_per_recall - len(facts),
+                user_id=user_id,
             )
             seen_ids = {f.id for f in facts}
             facts.extend(f for f in top_facts if f.id not in seen_ids)
@@ -166,6 +181,7 @@ class Recall:
         session_id: str,
         budget: int,
         graph_budget: int,
+        user_id: str = DEFAULT_USER_ID,
         existing_fact_ids: Optional[Set[int]] = None,
     ) -> str:
         now = now_epoch()
@@ -173,13 +189,13 @@ class Recall:
         temporal_window_days = self._detect_temporal_window_days(query)
 
         if query:
-            search_results = self._db.search_episodes(query, limit=10)
+            search_results = self._db.search_episodes(query, limit=10, user_id=user_id)
             candidates.extend(search_results)
             search_result_ids = {ep.id for ep in search_results if ep.id is not None}
         else:
             search_result_ids = set()
 
-        graph_scores = self._graph_episode_scores(query, graph_budget)
+        graph_scores = self._graph_episode_scores(query, graph_budget, user_id=user_id)
         graph_ranked_ids = [
             episode_id
             for episode_id, _score in sorted(
@@ -190,11 +206,12 @@ class Recall:
         salient = self._db.get_salient_episodes(
             min_salience=self._config.salience_threshold,
             limit=10,
+            user_id=user_id,
         )
         seen_ids = {e.id for e in candidates}
         candidates.extend(e for e in salient if e.id not in seen_ids)
 
-        recent = self._db.get_recent_episodes(limit=5)
+        recent = self._db.get_recent_episodes(limit=5, user_id=user_id)
         seen_ids = {e.id for e in candidates}
         candidates.extend(e for e in recent if e.id not in seen_ids)
 
@@ -247,13 +264,20 @@ class Recall:
             top_episodes.append(ep)
             lines.append(f"- {ep.to_recall_text(now)}")
 
-        lines.extend(self._enrich_with_links(top_episodes, existing_fact_ids or set()))
+        lines.extend(
+            self._enrich_with_links(
+                top_episodes, existing_fact_ids or set(), user_id=user_id
+            )
+        )
 
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
     def _enrich_with_links(
-        self, top_episodes: List[Episode], existing_fact_ids: set
+        self,
+        top_episodes: List[Episode],
+        existing_fact_ids: set,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[str]:
         """Pull in related context via entity links. Returns extra context lines."""
         lines: List[str] = []
@@ -266,7 +290,7 @@ class Recall:
                 continue
 
             for link in self._db.get_links_from(
-                "episode", ep.id, relation="extracted_from", limit=3
+                "episode", ep.id, relation="extracted_from", limit=3, user_id=user_id
             ):
                 if link["dst_type"] != "fact" or link["dst_id"] in added_fact_ids:
                     continue
@@ -282,7 +306,7 @@ class Recall:
                 continue
 
             for link in self._db.get_links_from(
-                "episode", ep.id, relation="related_to", limit=2
+                "episode", ep.id, relation="related_to", limit=2, user_id=user_id
             ):
                 related_id = link["dst_id"]
                 if (
@@ -301,11 +325,13 @@ class Recall:
 
         return lines
 
-    def _graph_episode_scores(self, query: str, graph_budget: int) -> Dict[int, float]:
+    def _graph_episode_scores(
+        self, query: str, graph_budget: int, user_id: str = DEFAULT_USER_ID
+    ) -> Dict[int, float]:
         if not query or not self._linker:
             return {}
 
-        seed_entity_ids = self._query_entity_ids(query)
+        seed_entity_ids = self._query_entity_ids(query, user_id=user_id)
         if not seed_entity_ids:
             return {}
 
@@ -314,6 +340,7 @@ class Recall:
             max_hops=self._config.graph_max_hops,
             max_results=max(self._config.graph_expansion_limit * 4, 12),
             hop_decay=self._config.graph_decay_factor,
+            user_id=user_id,
         )
         if not traversed:
             return {}
@@ -328,7 +355,9 @@ class Recall:
                 episode_scores[node_id] = max(score, episode_scores.get(node_id, 0.0))
                 continue
             if node_type == "fact":
-                for episode_id in self._linker.get_fact_episodes(node_id):
+                for episode_id in self._linker.get_fact_episodes(
+                    node_id, user_id=user_id
+                ):
                     episode_scores[episode_id] = max(
                         score * 0.85, episode_scores.get(episode_id, 0.0)
                     )
@@ -339,7 +368,9 @@ class Recall:
             ]
         )
 
-    def _query_entity_ids(self, query: str) -> List[int]:
+    def _query_entity_ids(
+        self, query: str, user_id: str = DEFAULT_USER_ID
+    ) -> List[int]:
         if not self._linker or not query:
             return []
 
@@ -358,7 +389,9 @@ class Recall:
                 entity_id = self._linker._entity_id(candidate)
                 if entity_id in seen:
                     continue
-                if not self._db.get_links_from("entity", entity_id, limit=1):
+                if not self._db.get_links_from(
+                    "entity", entity_id, limit=1, user_id=user_id
+                ):
                     continue
                 seen.add(entity_id)
                 entity_ids.append(entity_id)
@@ -376,8 +409,10 @@ class Recall:
             return 0
         return min(self._config.graph_expansion_limit, max(1, graph_budget // 75))
 
-    def _build_loops_section(self, budget: int) -> str:
-        loops = self._db.get_open_loops(limit=self._config.max_loops_per_recall)
+    def _build_loops_section(self, budget: int, user_id: str = DEFAULT_USER_ID) -> str:
+        loops = self._db.get_open_loops(
+            limit=self._config.max_loops_per_recall, user_id=user_id
+        )
         if not loops:
             return ""
 
@@ -389,10 +424,13 @@ class Recall:
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
-    def _build_reflections_section(self, budget: int) -> str:
+    def _build_reflections_section(
+        self, budget: int, user_id: str = DEFAULT_USER_ID
+    ) -> str:
         reflections = self._db.get_high_confidence_reflections(
             min_confidence=self._config.reflection_confidence_threshold,
             limit=self._config.max_reflections_per_recall,
+            user_id=user_id,
         )
         if not reflections:
             return ""
@@ -415,14 +453,16 @@ class Recall:
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
-    def _build_emotional_trajectory(self, session_id: str = "") -> str:
+    def _build_emotional_trajectory(
+        self, session_id: str = "", user_id: str = DEFAULT_USER_ID
+    ) -> str:
         trajectory = self._db.get_emotional_trajectory(
-            limit=5, session_id=session_id or None
+            limit=5, session_id=session_id or None, user_id=user_id
         )
         if not trajectory:
             return ""
 
-        baseline = self._db.get_affect_baseline()
+        baseline = self._db.get_affect_baseline(user_id=user_id)
         calibrated_trajectory = [
             {
                 "timestamp": entry["timestamp"],

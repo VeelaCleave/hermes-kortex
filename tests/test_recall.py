@@ -1,5 +1,6 @@
 import time
 
+from kortex.models import Fact
 from kortex.linker import Linker
 from kortex.models import Episode
 from kortex.recall import Recall
@@ -242,6 +243,31 @@ class TestEpisodeRanking:
         ctx = recall_with_graph.build_context("What did Amelia say about rollout?")
         assert "rollout issue from yesterday" in ctx
         assert "follow-up mitigation plan" in ctx
+
+    def test_build_context_scopes_results_to_user_id(self, kortex_db, kortex_config):
+        kortex_db.insert_episode(
+            Episode(
+                user_id="alice",
+                session_id="s1",
+                summary="alice architecture notes",
+                user_text="architecture",
+                salience=0.8,
+            )
+        )
+        kortex_db.insert_fact(
+            Fact(
+                user_id="alice",
+                subject_type="user",
+                predicate="prefers",
+                object_text="alice prefers dark mode",
+                confidence=0.8,
+            )
+        )
+        scoped_recall = Recall(kortex_db, kortex_config)
+
+        ctx = scoped_recall.build_context("architecture", user_id="bob")
+        assert "alice architecture notes" not in ctx
+        assert "alice prefers dark mode" not in ctx
 
 
 class TestRecallText:

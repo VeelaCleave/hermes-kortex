@@ -832,9 +832,11 @@ class KortexDB:
         limit: int = 10,
         session_id: Optional[str] = None,
         include_consolidated: bool = False,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Episode]:
         filters = []
-        params: List[Any] = []
+        params: List[Any] = [user_id]
+        filters.append("user_id=?")
         if not include_consolidated:
             filters.append("is_consolidated=0")
         if session_id:
@@ -854,7 +856,11 @@ class KortexDB:
         return [self._row_to_episode(r) for r in rows]
 
     def search_episodes(
-        self, query: str, limit: int = 10, include_consolidated: bool = False
+        self,
+        query: str,
+        limit: int = 10,
+        include_consolidated: bool = False,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Episode]:
         normalized_query = self._normalize_fts_query(query)
         if not normalized_query:
@@ -867,13 +873,13 @@ class KortexDB:
             .execute(
                 """SELECT e.* FROM episodes e
                JOIN episodes_fts f ON e.id = f.rowid
-                WHERE episodes_fts MATCH ?
-               """
+                WHERE episodes_fts MATCH ? AND e.user_id=?
+                """
                 + consolidated_clause
                 + """
                 ORDER BY rank
                 LIMIT ?""",
-                (normalized_query, limit),
+                (normalized_query, user_id, limit),
             )
             .fetchall()
         )
@@ -885,9 +891,10 @@ class KortexDB:
         min_salience: float = 0.5,
         limit: int = 10,
         include_consolidated: bool = False,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Episode]:
-        filters = ["salience >= ?"]
-        params: List[Any] = [min_salience]
+        filters = ["user_id=?", "salience >= ?"]
+        params: List[Any] = [user_id, min_salience]
         if not include_consolidated:
             filters.append("is_consolidated=0")
         params.append(limit)
@@ -902,21 +909,33 @@ class KortexDB:
         self.touch_episodes([row["id"] for row in rows])
         return [self._row_to_episode(r) for r in rows]
 
-    def count_episodes(self) -> int:
-        return self._get_conn().execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
-
-    def get_session_turn_count(self, session_id: str) -> int:
+    def count_episodes(self, user_id: str = DEFAULT_USER_ID) -> int:
         return (
             self._get_conn()
-            .execute("SELECT COUNT(*) FROM episodes WHERE session_id=?", (session_id,))
+            .execute("SELECT COUNT(*) FROM episodes WHERE user_id=?", (user_id,))
+            .fetchone()[0]
+        )
+
+    def get_session_turn_count(
+        self, session_id: str, user_id: str = DEFAULT_USER_ID
+    ) -> int:
+        return (
+            self._get_conn()
+            .execute(
+                "SELECT COUNT(*) FROM episodes WHERE session_id=? AND user_id=?",
+                (session_id, user_id),
+            )
             .fetchone()[0]
         )
 
     def get_episodes_for_session(
-        self, session_id: str, limit: Optional[int] = None
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Episode]:
-        query = "SELECT * FROM episodes WHERE session_id=? ORDER BY timestamp ASC"
-        params: List[Any] = [session_id]
+        query = "SELECT * FROM episodes WHERE session_id=? AND user_id=? ORDER BY timestamp ASC"
+        params: List[Any] = [session_id, user_id]
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)
@@ -944,20 +963,24 @@ class KortexDB:
         except sqlite3.DatabaseError:
             logger.warning("Skipping episode touch due to database write failure")
 
-    def count_unconsolidated_episodes(self) -> int:
+    def count_unconsolidated_episodes(self, user_id: str = DEFAULT_USER_ID) -> int:
         return (
             self._get_conn()
             .execute(
-                "SELECT COUNT(*) FROM episodes WHERE is_consolidated=0 AND raw_preserved=1"
+                "SELECT COUNT(*) FROM episodes WHERE user_id=? AND is_consolidated=0 AND raw_preserved=1",
+                (user_id,),
             )
             .fetchone()[0]
         )
 
     def get_unconsolidated_episodes(
-        self, limit: int = 100, session_id: Optional[str] = None
+        self,
+        limit: int = 100,
+        session_id: Optional[str] = None,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Episode]:
-        query = "SELECT * FROM episodes WHERE is_consolidated=0 AND raw_preserved=1"
-        params: List[Any] = []
+        query = "SELECT * FROM episodes WHERE user_id=? AND is_consolidated=0 AND raw_preserved=1"
+        params: List[Any] = [user_id]
         if session_id:
             query += " AND session_id=?"
             params.append(session_id)
@@ -1007,14 +1030,17 @@ class KortexDB:
             return cur.lastrowid
 
     def list_conversation_summaries(
-        self, limit: int = 10, session_id: Optional[str] = None
+        self,
+        limit: int = 10,
+        session_id: Optional[str] = None,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[dict]:
         if session_id:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM conversation_summaries WHERE session_id=? ORDER BY updated_at DESC LIMIT ?",
-                    (session_id, limit),
+                    "SELECT * FROM conversation_summaries WHERE session_id=? AND user_id=? ORDER BY updated_at DESC LIMIT ?",
+                    (session_id, user_id, limit),
                 )
                 .fetchall()
             )
@@ -1022,22 +1048,24 @@ class KortexDB:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM conversation_summaries ORDER BY updated_at DESC LIMIT ?",
-                    (limit,),
+                    "SELECT * FROM conversation_summaries WHERE user_id=? ORDER BY updated_at DESC LIMIT ?",
+                    (user_id, limit),
                 )
                 .fetchall()
             )
         return [dict(r) for r in rows]
 
-    def search_conversation_summaries(self, query: str, limit: int = 5) -> List[dict]:
+    def search_conversation_summaries(
+        self, query: str, limit: int = 5, user_id: str = DEFAULT_USER_ID
+    ) -> List[dict]:
         like = f"%{query}%"
         rows = (
             self._get_conn()
             .execute(
                 """SELECT * FROM conversation_summaries
-               WHERE summary_text LIKE ? OR key_entities LIKE ? OR session_id LIKE ?
-               ORDER BY updated_at DESC LIMIT ?""",
-                (like, like, like, limit),
+                WHERE user_id=? AND (summary_text LIKE ? OR key_entities LIKE ? OR session_id LIKE ?)
+                ORDER BY updated_at DESC LIMIT ?""",
+                (user_id, like, like, like, limit),
             )
             .fetchall()
         )
@@ -1076,14 +1104,17 @@ class KortexDB:
             return fact.id
 
     def get_active_facts(
-        self, subject_type: Optional[str] = None, limit: int = 20
+        self,
+        subject_type: Optional[str] = None,
+        limit: int = 20,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Fact]:
         if subject_type:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM facts WHERE status='active' AND subject_type=? ORDER BY confidence DESC LIMIT ?",
-                    (subject_type, limit),
+                    "SELECT * FROM facts WHERE status='active' AND user_id=? AND subject_type=? ORDER BY confidence DESC LIMIT ?",
+                    (user_id, subject_type, limit),
                 )
                 .fetchall()
             )
@@ -1091,8 +1122,8 @@ class KortexDB:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM facts WHERE status='active' ORDER BY confidence DESC LIMIT ?",
-                    (limit,),
+                    "SELECT * FROM facts WHERE status='active' AND user_id=? ORDER BY confidence DESC LIMIT ?",
+                    (user_id, limit),
                 )
                 .fetchall()
             )
@@ -1117,7 +1148,9 @@ class KortexDB:
         )
         return [self._row_to_fact(r) for r in rows]
 
-    def search_facts(self, query: str, limit: int = 10) -> List[Fact]:
+    def search_facts(
+        self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
+    ) -> List[Fact]:
         normalized_query = self._normalize_fts_query(query)
         if not normalized_query:
             return []
@@ -1126,10 +1159,10 @@ class KortexDB:
             .execute(
                 """SELECT f.* FROM facts f
                JOIN facts_fts fts ON f.id = fts.rowid
-               WHERE facts_fts MATCH ? AND f.status='active'
-               ORDER BY rank
-               LIMIT ?""",
-                (normalized_query, limit),
+                WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=?
+                ORDER BY rank
+                LIMIT ?""",
+                (normalized_query, user_id, limit),
             )
             .fetchall()
         )
@@ -1166,20 +1199,28 @@ class KortexDB:
             )
 
     def get_facts_by_predicate(
-        self, predicate: str, status: str = "active", limit: int = 20
+        self,
+        predicate: str,
+        status: str = "active",
+        limit: int = 20,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Fact]:
         rows = (
             self._get_conn()
             .execute(
-                "SELECT * FROM facts WHERE predicate=? AND status=? ORDER BY confidence DESC LIMIT ?",
-                (predicate, status, limit),
+                "SELECT * FROM facts WHERE predicate=? AND status=? AND user_id=? ORDER BY confidence DESC LIMIT ?",
+                (predicate, status, user_id, limit),
             )
             .fetchall()
         )
         return [self._row_to_fact(r) for r in rows]
 
     def find_similar_facts(
-        self, text: str, predicate: Optional[str] = None, limit: int = 5
+        self,
+        text: str,
+        predicate: Optional[str] = None,
+        limit: int = 5,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Fact]:
         normalized_query = self._normalize_fts_query(text)
         if not normalized_query:
@@ -1191,9 +1232,9 @@ class KortexDB:
                     .execute(
                         """SELECT f.* FROM facts f
                         JOIN facts_fts fts ON f.id = fts.rowid
-                        WHERE facts_fts MATCH ? AND f.status='active' AND f.predicate=?
+                        WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=? AND f.predicate=?
                         ORDER BY rank LIMIT ?""",
-                        (normalized_query, predicate, limit),
+                        (normalized_query, user_id, predicate, limit),
                     )
                     .fetchall()
                 )
@@ -1203,9 +1244,9 @@ class KortexDB:
                     .execute(
                         """SELECT f.* FROM facts f
                         JOIN facts_fts fts ON f.id = fts.rowid
-                        WHERE facts_fts MATCH ? AND f.status='active'
+                        WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=?
                         ORDER BY rank LIMIT ?""",
-                        (normalized_query, limit),
+                        (normalized_query, user_id, limit),
                     )
                     .fetchall()
                 )
@@ -1219,10 +1260,15 @@ class KortexDB:
         filtered = [token for token in tokens if len(token) > 1]
         return " OR ".join(filtered)
 
-    def count_facts(self, status: str = "active") -> int:
+    def count_facts(
+        self, status: str = "active", user_id: str = DEFAULT_USER_ID
+    ) -> int:
         return (
             self._get_conn()
-            .execute("SELECT COUNT(*) FROM facts WHERE status=?", (status,))
+            .execute(
+                "SELECT COUNT(*) FROM facts WHERE status=? AND user_id=?",
+                (status, user_id),
+            )
             .fetchone()[0]
         )
 
@@ -1265,12 +1311,14 @@ class KortexDB:
             loop.id = cur.lastrowid
             return loop.id
 
-    def get_open_loops(self, limit: int = 10) -> List[OpenLoop]:
+    def get_open_loops(
+        self, limit: int = 10, user_id: str = DEFAULT_USER_ID
+    ) -> List[OpenLoop]:
         rows = (
             self._get_conn()
             .execute(
-                "SELECT * FROM open_loops WHERE status='open' ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM open_loops WHERE status='open' AND user_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
             )
             .fetchall()
         )
@@ -1300,10 +1348,13 @@ class KortexDB:
             )
             return cur.rowcount
 
-    def count_open_loops(self) -> int:
+    def count_open_loops(self, user_id: str = DEFAULT_USER_ID) -> int:
         return (
             self._get_conn()
-            .execute("SELECT COUNT(*) FROM open_loops WHERE status='open'")
+            .execute(
+                "SELECT COUNT(*) FROM open_loops WHERE status='open' AND user_id=?",
+                (user_id,),
+            )
             .fetchone()[0]
         )
 
@@ -1347,14 +1398,17 @@ class KortexDB:
             return ref.id
 
     def get_reflections(
-        self, kind: Optional[str] = None, limit: int = 10
+        self,
+        kind: Optional[str] = None,
+        limit: int = 10,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Reflection]:
         if kind:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM reflections WHERE kind=? ORDER BY confidence DESC LIMIT ?",
-                    (kind, limit),
+                    "SELECT * FROM reflections WHERE kind=? AND user_id=? ORDER BY confidence DESC LIMIT ?",
+                    (kind, user_id, limit),
                 )
                 .fetchall()
             )
@@ -1362,8 +1416,8 @@ class KortexDB:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM reflections ORDER BY confidence DESC LIMIT ?",
-                    (limit,),
+                    "SELECT * FROM reflections WHERE user_id=? ORDER BY confidence DESC LIMIT ?",
+                    (user_id, limit),
                 )
                 .fetchall()
             )
@@ -1377,16 +1431,18 @@ class KortexDB:
         )
         return self._row_to_reflection(row) if row else None
 
-    def search_reflections(self, query: str, limit: int = 10) -> List[Reflection]:
+    def search_reflections(
+        self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
+    ) -> List[Reflection]:
         rows = (
             self._get_conn()
             .execute(
                 """SELECT r.* FROM reflections r
                JOIN reflections_fts fts ON r.id = fts.rowid
-               WHERE reflections_fts MATCH ?
-               ORDER BY rank
-               LIMIT ?""",
-                (query, limit),
+                WHERE reflections_fts MATCH ? AND r.user_id=?
+                ORDER BY rank
+                LIMIT ?""",
+                (query, user_id, limit),
             )
             .fetchall()
         )
@@ -1407,13 +1463,16 @@ class KortexDB:
             )
 
     def get_high_confidence_reflections(
-        self, min_confidence: float = 0.5, limit: int = 10
+        self,
+        min_confidence: float = 0.5,
+        limit: int = 10,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Reflection]:
         rows = (
             self._get_conn()
             .execute(
-                "SELECT * FROM reflections WHERE confidence >= ? ORDER BY confidence DESC LIMIT ?",
-                (min_confidence, limit),
+                "SELECT * FROM reflections WHERE confidence >= ? AND user_id=? ORDER BY confidence DESC LIMIT ?",
+                (min_confidence, user_id, limit),
             )
             .fetchall()
         )
@@ -1564,12 +1623,13 @@ class KortexDB:
         src_id: int,
         relation: str = None,
         limit: Optional[int] = 20,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[dict]:
         query = (
             "SELECT dst_type, dst_id, relation, weight FROM entity_links "
-            "WHERE src_type=? AND src_id=?"
+            "WHERE src_type=? AND src_id=? AND user_id=?"
         )
-        params: List[Any] = [src_type, src_id]
+        params: List[Any] = [src_type, src_id, user_id]
         if relation:
             query += " AND relation=?"
             params.append(relation)
@@ -1594,12 +1654,13 @@ class KortexDB:
         dst_id: int,
         relation: str = None,
         limit: Optional[int] = 20,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[dict]:
         query = (
             "SELECT src_type, src_id, relation, weight FROM entity_links "
-            "WHERE dst_type=? AND dst_id=?"
+            "WHERE dst_type=? AND dst_id=? AND user_id=?"
         )
-        params: List[Any] = [dst_type, dst_id]
+        params: List[Any] = [dst_type, dst_id, user_id]
         if relation:
             query += " AND relation=?"
             params.append(relation)
@@ -1638,14 +1699,15 @@ class KortexDB:
         dst_type: str,
         dst_id: int,
         relation: str,
+        user_id: str = DEFAULT_USER_ID,
     ) -> bool:
         row = (
             self._get_conn()
             .execute(
                 """SELECT 1 FROM entity_links
-                   WHERE src_type=? AND src_id=? AND dst_type=? AND dst_id=? AND relation=?
+                   WHERE src_type=? AND src_id=? AND dst_type=? AND dst_id=? AND relation=? AND user_id=?
                    LIMIT 1""",
-                (src_type, src_id, dst_type, dst_id, relation),
+                (src_type, src_id, dst_type, dst_id, relation, user_id),
             )
             .fetchone()
         )
@@ -1691,14 +1753,17 @@ class KortexDB:
             return cur.lastrowid
 
     def get_recent_emotions(
-        self, limit: int = 10, session_id: Optional[str] = None
+        self,
+        limit: int = 10,
+        session_id: Optional[str] = None,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[AffectSignal]:
         if session_id:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM emotion_log WHERE session_id=? ORDER BY timestamp DESC LIMIT ?",
-                    (session_id, limit),
+                    "SELECT * FROM emotion_log WHERE session_id=? AND user_id=? ORDER BY timestamp DESC LIMIT ?",
+                    (session_id, user_id, limit),
                 )
                 .fetchall()
             )
@@ -1706,8 +1771,8 @@ class KortexDB:
             rows = (
                 self._get_conn()
                 .execute(
-                    "SELECT * FROM emotion_log ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
+                    "SELECT * FROM emotion_log WHERE user_id=? ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, limit),
                 )
                 .fetchall()
             )
@@ -1722,16 +1787,19 @@ class KortexDB:
         return self._row_to_affect_signal(row) if row else None
 
     def get_emotional_trajectory(
-        self, limit: int = 20, session_id: Optional[str] = None
+        self,
+        limit: int = 20,
+        session_id: Optional[str] = None,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[dict]:
         if session_id:
             rows = (
                 self._get_conn()
                 .execute(
                     """SELECT timestamp, valence, arousal, dominant_emotion
-                       FROM emotion_log WHERE session_id=?
+                       FROM emotion_log WHERE session_id=? AND user_id=?
                        ORDER BY timestamp DESC LIMIT ?""",
-                    (session_id, limit),
+                    (session_id, user_id, limit),
                 )
                 .fetchall()
             )
@@ -1740,8 +1808,8 @@ class KortexDB:
                 self._get_conn()
                 .execute(
                     """SELECT timestamp, valence, arousal, dominant_emotion
-                       FROM emotion_log ORDER BY timestamp DESC LIMIT ?""",
-                    (limit,),
+                       FROM emotion_log WHERE user_id=? ORDER BY timestamp DESC LIMIT ?""",
+                    (user_id, limit),
                 )
                 .fetchall()
             )
