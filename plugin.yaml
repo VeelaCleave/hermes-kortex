@@ -1,0 +1,9 @@
+name: kortex
+version: 0.1.0
+description: "Project KORTEX — Experiential memory with genuine continuity. Episodic recall, emotional memory, temporal awareness, persistent personality, and self-evolution."
+hooks:
+  - on_session_end
+  - on_pre_compress
+  - on_memory_write
+  - on_turn_start
+  - on_delegation
