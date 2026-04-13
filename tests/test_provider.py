@@ -109,8 +109,10 @@ class TestProviderToolCall:
     def test_tool_schemas(self, tmp_path):
         p = self._setup_provider(tmp_path)
         schemas = p.get_tool_schemas()
-        assert len(schemas) == 1
-        assert schemas[0]["name"] == "kortex_search"
+        assert len(schemas) == 2
+        names = {s["name"] for s in schemas}
+        assert "kortex_search" in names
+        assert "kortex_identity" in names
         p.shutdown()
 
     def test_status_action(self, tmp_path):

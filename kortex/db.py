@@ -15,7 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
+from .models import (
+    AffectSignal,
+    Episode,
+    Fact,
+    IdentityDelta,
+    OpenLoop,
+    Reflection,
+    RelationshipState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -755,10 +763,8 @@ class KortexDB:
 
     def get_identity_deltas(
         self, applied: Optional[bool] = None, limit: int = 10
-    ) -> List["IdentityDelta"]:
+    ) -> List[IdentityDelta]:
         """Get identity deltas, optionally filtered by applied status."""
-        from .models import IdentityDelta
-
         if applied is not None:
             rows = (
                 self._get_conn()
@@ -777,17 +783,16 @@ class KortexDB:
                 )
                 .fetchall()
             )
-        return [
-            IdentityDelta(
-                id=r["id"],
-                text=r["text"],
-                confidence=r["confidence"],
-                source_episode_id=r["source_episode_id"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-                applied=bool(r["applied"]),
-            )
-            for r in rows
-        ]
+        return [self._row_to_identity_delta(r) for r in rows]
+
+    def get_identity_delta_by_id(self, delta_id: int) -> Optional[IdentityDelta]:
+        """Get a single identity delta by ID."""
+        row = (
+            self._get_conn()
+            .execute("SELECT * FROM identity_deltas WHERE id=?", (delta_id,))
+            .fetchone()
+        )
+        return self._row_to_identity_delta(row) if row else None
 
     # -- Relationship State --------------------------------------------------
 
@@ -831,8 +836,6 @@ class KortexDB:
     # -- Identity Deltas -----------------------------------------------------
 
     def insert_identity_delta(self, delta: "IdentityDelta") -> int:
-        from .models import IdentityDelta
-
         with self._tx() as conn:
             cur = conn.execute(
                 """INSERT INTO identity_deltas (text, confidence, source_episode_id, created_at, applied)
@@ -847,6 +850,24 @@ class KortexDB:
             )
             delta.id = cur.lastrowid
             return delta.id
+
+    def mark_identity_delta_applied(self, delta_id: int) -> bool:
+        """Mark an identity delta as applied. Returns True if found and updated."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE identity_deltas SET applied=1 WHERE id=?", (delta_id,)
+            )
+            return cur.rowcount > 0
+
+    def delete_identity_delta(self, delta_id: int) -> bool:
+        """Delete an identity delta (for rejection). Returns True if found and deleted."""
+        with self._tx() as conn:
+            cur = conn.execute("DELETE FROM identity_deltas WHERE id=?", (delta_id,))
+            return cur.rowcount > 0
+
+    def reject_identity_delta(self, delta_id: int) -> bool:
+        """Delete an identity delta as a rejection action."""
+        return self.delete_identity_delta(delta_id)
 
     # -- Entity Links --------------------------------------------------------
 
@@ -1154,6 +1175,17 @@ class KortexDB:
             arousal=row["arousal"],
             dominant_emotion=row["dominant_emotion"],
             is_sarcastic=bool(row["is_sarcastic"]),
+        )
+
+    @staticmethod
+    def _row_to_identity_delta(row: sqlite3.Row) -> IdentityDelta:
+        return IdentityDelta(
+            id=row["id"],
+            text=row["text"],
+            confidence=row["confidence"],
+            source_episode_id=row["source_episode_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            applied=bool(row["applied"]),
         )
 
     def close(self) -> None:

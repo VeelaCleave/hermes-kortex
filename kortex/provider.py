@@ -18,6 +18,7 @@ from .affect import score_affect
 from .ingest import Ingestor
 from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, RelationshipState
+from .promote import Promoter
 from .recall import Recall
 from .reflect import process_reflections
 from .relationship import update_relationship
@@ -67,6 +68,46 @@ KORTEX_SEARCH_SCHEMA = {
     },
 }
 
+KORTEX_IDENTITY_SCHEMA = {
+    "name": "kortex_identity",
+    "description": (
+        "Manage identity evolution via KORTEX. Review learned personality traits "
+        "and optionally promote them to SOUL.md for permanent identity changes.\n\n"
+        "Actions:\n"
+        "- list_pending: Show identity deltas awaiting review\n"
+        "- preview: Preview a specific delta with source context\n"
+        "- approve: Apply a delta to SOUL.md (makes it permanent)\n"
+        "- reject: Discard a delta\n"
+        "- approve_all: Apply all pending deltas above confidence threshold\n"
+        "- show_soul: Display current SOUL.md content"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "list_pending",
+                    "preview",
+                    "approve",
+                    "reject",
+                    "approve_all",
+                    "show_soul",
+                ],
+            },
+            "delta_id": {
+                "type": "integer",
+                "description": "Identity delta ID (for preview/approve/reject)",
+            },
+            "min_confidence": {
+                "type": "number",
+                "description": "Minimum confidence for approve_all (default: 0.6)",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 try:
     from agent.memory_provider import MemoryProvider
@@ -94,6 +135,7 @@ class KortexProvider(MemoryProvider):
         self._ingestor: Optional[Ingestor] = None
         self._linker: Optional[Linker] = None
         self._recall: Optional[Recall] = None
+        self._promoter: Optional[Promoter] = None
         self._session_id: str = ""
         self._hermes_home: str = ""
         self._prefetch_cache: str = ""
@@ -120,6 +162,7 @@ class KortexProvider(MemoryProvider):
         self._ingestor = Ingestor(self._db)
         self._linker = Linker(self._db)
         self._recall = Recall(self._db, self._config)
+        self._promoter = Promoter(self._db, soul_path=self._config.soul_path)
 
         logger.info("KORTEX initialized (session=%s, db=%s)", session_id, db_path)
 
@@ -224,32 +267,35 @@ class KortexProvider(MemoryProvider):
         threading.Thread(target=_bg, daemon=True).start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [KORTEX_SEARCH_SCHEMA]
+        return [KORTEX_SEARCH_SCHEMA, KORTEX_IDENTITY_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
-        if tool_name != "kortex_search":
+        if tool_name not in {"kortex_search", "kortex_identity"}:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
         if not self._db:
             return json.dumps({"error": "KORTEX not initialized"})
 
-        action = args.get("action", "")
-        query = args.get("query", "")
-        limit = args.get("limit", 5)
-
         try:
-            if action == "search":
-                return self._handle_search(query, limit)
-            elif action == "recall_episode":
-                return self._handle_recall_episode(args.get("episode_id"))
-            elif action == "list_facts":
-                return self._handle_list_facts(limit)
-            elif action == "list_loops":
-                return self._handle_list_loops(limit)
-            elif action == "status":
-                return self._handle_status()
-            else:
-                return json.dumps({"error": f"Unknown action: {action}"})
+            if tool_name == "kortex_search":
+                action = args.get("action", "")
+                query = args.get("query", "")
+                limit = args.get("limit", 5)
+
+                if action == "search":
+                    return self._handle_search(query, limit)
+                elif action == "recall_episode":
+                    return self._handle_recall_episode(args.get("episode_id"))
+                elif action == "list_facts":
+                    return self._handle_list_facts(limit)
+                elif action == "list_loops":
+                    return self._handle_list_loops(limit)
+                elif action == "status":
+                    return self._handle_status()
+                else:
+                    return json.dumps({"error": f"Unknown action: {action}"})
+
+            return self._handle_identity_call(args)
         except Exception as exc:
             logger.exception("KORTEX tool call failed")
             return json.dumps({"error": str(exc)})
@@ -424,3 +470,69 @@ class KortexProvider(MemoryProvider):
                 ],
             }
         )
+
+    def _handle_identity_call(self, args: Dict[str, Any]) -> str:
+        if not self._promoter:
+            return json.dumps({"error": "KORTEX promoter not initialized"})
+
+        action = args.get("action", "")
+        delta_id = args.get("delta_id")
+
+        if action == "list_pending":
+            limit = args.get("limit", 20)
+            deltas = self._promoter.list_pending(limit=limit)
+            return json.dumps(
+                {
+                    "pending": [
+                        {
+                            "id": delta.id,
+                            "text": delta.text[:500],
+                            "confidence": delta.confidence,
+                            "created_at": delta.created_at.isoformat(),
+                            "source_episode_id": delta.source_episode_id,
+                        }
+                        for delta in deltas
+                    ]
+                }
+            )
+
+        if action == "preview":
+            if delta_id is None:
+                return json.dumps({"error": "delta_id required"})
+            return json.dumps(self._promoter.preview_delta(delta_id))
+
+        if action == "approve":
+            if delta_id is None:
+                return json.dumps({"error": "delta_id required"})
+            return json.dumps(self._promoter.approve_and_apply(delta_id))
+
+        if action == "reject":
+            if delta_id is None:
+                return json.dumps({"error": "delta_id required"})
+            return json.dumps(self._promoter.reject_delta(delta_id))
+
+        if action == "approve_all":
+            min_confidence = float(args.get("min_confidence", 0.6))
+            pending = self._promoter.list_pending(limit=1000)
+            eligible_ids = [
+                delta.id
+                for delta in pending
+                if delta.id is not None and delta.confidence >= min_confidence
+            ]
+            return json.dumps(
+                {
+                    "min_confidence": min_confidence,
+                    **self._promoter.approve_multiple(eligible_ids),
+                }
+            )
+
+        if action == "show_soul":
+            soul_content = self._promoter.get_soul_content()
+            return json.dumps(
+                {
+                    "soul_path": str(self._promoter._resolve_soul_path()),
+                    "content": soul_content,
+                }
+            )
+
+        return json.dumps({"error": f"Unknown action: {action}"})
