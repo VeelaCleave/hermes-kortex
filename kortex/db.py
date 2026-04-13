@@ -6,13 +6,15 @@ on first initialize(). Schema versioned via user_version pragma.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
 import threading
 from contextlib import contextmanager
+from hashlib import sha256
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .models import (
     AffectSignal,
@@ -296,6 +298,129 @@ CREATE TABLE IF NOT EXISTS kortex_schema_version (
 );
 """
 
+_LOSSLESS_CONTEXT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS context_conversations (
+    conversation_id       TEXT PRIMARY KEY,
+    user_id               TEXT NOT NULL DEFAULT '__default__',
+    created_at            REAL NOT NULL,
+    updated_at            REAL NOT NULL,
+    status                TEXT NOT NULL DEFAULT 'active',
+    active_checkpoint_id  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS context_session_aliases (
+    hermes_session_id         TEXT PRIMARY KEY,
+    conversation_id           TEXT NOT NULL REFERENCES context_conversations(conversation_id),
+    lineage_parent_session_id TEXT,
+    created_at                REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS context_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES context_conversations(conversation_id),
+    seq             INTEGER NOT NULL,
+    role            TEXT NOT NULL,
+    raw_json        TEXT NOT NULL,
+    text_content    TEXT NOT NULL DEFAULT '',
+    content_hash    TEXT NOT NULL DEFAULT '',
+    token_estimate  INTEGER NOT NULL DEFAULT 0,
+    created_at      REAL NOT NULL,
+    UNIQUE (conversation_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_messages_conv_seq
+ON context_messages (conversation_id, seq);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS context_messages_fts USING fts5(
+    text_content,
+    conversation_id UNINDEXED,
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS context_messages_ai AFTER INSERT ON context_messages BEGIN
+    INSERT INTO context_messages_fts(rowid, text_content, conversation_id)
+    VALUES (new.id, new.text_content, new.conversation_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS context_messages_ad AFTER DELETE ON context_messages BEGIN
+    INSERT INTO context_messages_fts(context_messages_fts, rowid, text_content, conversation_id)
+    VALUES ('delete', old.id, old.text_content, old.conversation_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS context_messages_au AFTER UPDATE ON context_messages BEGIN
+    INSERT INTO context_messages_fts(context_messages_fts, rowid, text_content, conversation_id)
+    VALUES ('delete', old.id, old.text_content, old.conversation_id);
+    INSERT INTO context_messages_fts(rowid, text_content, conversation_id)
+    VALUES (new.id, new.text_content, new.conversation_id);
+END;
+
+CREATE TABLE IF NOT EXISTS context_spans (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES context_conversations(conversation_id),
+    start_seq       INTEGER NOT NULL,
+    end_seq         INTEGER NOT NULL,
+    kind            TEXT NOT NULL DEFAULT 'raw',
+    checkpoint_id   TEXT,
+    archived_at     REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_spans_conv_range
+ON context_spans (conversation_id, start_seq, end_seq);
+
+CREATE TABLE IF NOT EXISTS context_refs (
+    ref_id          TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES context_conversations(conversation_id),
+    ref_type        TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    payload_json    TEXT NOT NULL DEFAULT '{}',
+    source_span_id  INTEGER REFERENCES context_spans(id),
+    salience        REAL NOT NULL DEFAULT 0.0,
+    open_state      TEXT NOT NULL DEFAULT 'open',
+    created_at      REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_refs_conv_type
+ON context_refs (conversation_id, ref_type);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS context_refs_fts USING fts5(
+    label,
+    conversation_id UNINDEXED,
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS context_refs_ai AFTER INSERT ON context_refs BEGIN
+    INSERT INTO context_refs_fts(rowid, label, conversation_id)
+    VALUES (new.rowid, new.label, new.conversation_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS context_refs_ad AFTER DELETE ON context_refs BEGIN
+    INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
+    VALUES ('delete', old.rowid, old.label, old.conversation_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS context_refs_au AFTER UPDATE ON context_refs BEGIN
+    INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
+    VALUES ('delete', old.rowid, old.label, old.conversation_id);
+    INSERT INTO context_refs_fts(rowid, label, conversation_id)
+    VALUES (new.rowid, new.label, new.conversation_id);
+END;
+
+CREATE TABLE IF NOT EXISTS context_checkpoints (
+    checkpoint_id         TEXT PRIMARY KEY,
+    conversation_id       TEXT NOT NULL REFERENCES context_conversations(conversation_id),
+    replaced_start_seq    INTEGER NOT NULL,
+    replaced_end_seq      INTEGER NOT NULL,
+    export_text           TEXT NOT NULL,
+    export_token_estimate INTEGER NOT NULL DEFAULT 0,
+    source_span_ids_json  TEXT NOT NULL DEFAULT '[]',
+    hot_ref_ids_json      TEXT NOT NULL DEFAULT '[]',
+    created_at            REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_checkpoints_conv_created
+ON context_checkpoints (conversation_id, created_at);
+"""
+
 
 def _as_epoch(value: Any) -> Optional[float]:
     return parse_timestamp(value)
@@ -335,6 +460,7 @@ class KortexDB:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             conn.executescript(_SCHEMA_SQL)
+            conn.executescript(_LOSSLESS_CONTEXT_SCHEMA_SQL)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._record_schema_version(conn)
             conn.commit()
@@ -343,6 +469,9 @@ class KortexDB:
             )
         elif version < SCHEMA_VERSION:
             self._migrate(conn, version)
+        else:
+            conn.executescript(_LOSSLESS_CONTEXT_SCHEMA_SQL)
+            conn.commit()
 
     def _migrate(self, conn: sqlite3.Connection, from_version: int) -> None:
         if from_version < 2:
@@ -2011,6 +2140,275 @@ class KortexDB:
             created_at=_as_epoch(row["created_at"]) or 0.0,
             applied=bool(row["applied"]),
         )
+
+    # -- Lossless context engine storage ------------------------------------
+
+    def ensure_context_conversation(
+        self, conversation_id: str, *, user_id: str = DEFAULT_USER_ID
+    ) -> None:
+        now = now_epoch()
+        with self._tx() as conn:
+            conn.execute(
+                """INSERT INTO context_conversations
+                   (conversation_id, user_id, created_at, updated_at, status)
+                   VALUES (?, ?, ?, ?, 'active')
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                     user_id=excluded.user_id,
+                     updated_at=excluded.updated_at""",
+                (conversation_id, user_id, now, now),
+            )
+
+    def map_session_alias(
+        self,
+        hermes_session_id: str,
+        conversation_id: str,
+        *,
+        lineage_parent_session_id: Optional[str] = None,
+    ) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                """INSERT INTO context_session_aliases
+                   (hermes_session_id, conversation_id, lineage_parent_session_id, created_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(hermes_session_id) DO UPDATE SET
+                     conversation_id=excluded.conversation_id,
+                     lineage_parent_session_id=excluded.lineage_parent_session_id""",
+                (
+                    hermes_session_id,
+                    conversation_id,
+                    lineage_parent_session_id,
+                    now_epoch(),
+                ),
+            )
+
+    def get_context_conversation_id(self, hermes_session_id: str) -> Optional[str]:
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT conversation_id FROM context_session_aliases WHERE hermes_session_id=?",
+                (hermes_session_id,),
+            )
+            .fetchone()
+        )
+        return row["conversation_id"] if row else None
+
+    def get_next_context_seq(self, conversation_id: str) -> int:
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM context_messages WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            .fetchone()
+        )
+        return int(row["max_seq"] or 0) + 1
+
+    def archive_context_messages(
+        self,
+        conversation_id: str,
+        messages: List[Dict[str, Any]],
+        *,
+        start_seq: Optional[int] = None,
+    ) -> tuple[int, int]:
+        if not messages:
+            raise ValueError("Cannot archive empty messages")
+
+        seq = start_seq or self.get_next_context_seq(conversation_id)
+        first_seq = seq
+        created_at = now_epoch()
+        with self._tx() as conn:
+            for msg in messages:
+                raw_json = json.dumps(msg, ensure_ascii=False, sort_keys=True)
+                text_content = self._message_text_content(msg)
+                conn.execute(
+                    """INSERT OR IGNORE INTO context_messages
+                       (conversation_id, seq, role, raw_json, text_content, content_hash, token_estimate, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        conversation_id,
+                        seq,
+                        msg.get("role", "user"),
+                        raw_json,
+                        text_content,
+                        sha256(raw_json.encode("utf-8")).hexdigest(),
+                        max(1, len(raw_json) // 4),
+                        created_at,
+                    ),
+                )
+                seq += 1
+        return first_seq, seq - 1
+
+    def create_context_span(
+        self,
+        conversation_id: str,
+        *,
+        start_seq: int,
+        end_seq: int,
+        kind: str = "raw",
+        checkpoint_id: Optional[str] = None,
+    ) -> int:
+        with self._tx() as conn:
+            cur = conn.execute(
+                """INSERT INTO context_spans
+                   (conversation_id, start_seq, end_seq, kind, checkpoint_id, archived_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (conversation_id, start_seq, end_seq, kind, checkpoint_id, now_epoch()),
+            )
+            return int(cur.lastrowid)
+
+    def insert_context_ref(
+        self,
+        conversation_id: str,
+        *,
+        ref_id: str,
+        ref_type: str,
+        label: str,
+        payload: Dict[str, Any],
+        source_span_id: Optional[int],
+        salience: float = 0.0,
+        open_state: str = "open",
+    ) -> None:
+        created_at = now_epoch()
+        with self._tx() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO context_refs
+                   (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM context_refs WHERE ref_id=?), ?))""",
+                (
+                    ref_id,
+                    conversation_id,
+                    ref_type,
+                    label,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    source_span_id,
+                    salience,
+                    open_state,
+                    ref_id,
+                    created_at,
+                ),
+            )
+
+    def insert_context_checkpoint(
+        self,
+        conversation_id: str,
+        *,
+        checkpoint_id: str,
+        replaced_start_seq: int,
+        replaced_end_seq: int,
+        export_text: str,
+        source_span_ids: List[int],
+        hot_ref_ids: List[str],
+    ) -> None:
+        token_estimate = max(1, len(export_text) // 4)
+        now = now_epoch()
+        with self._tx() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO context_checkpoints
+                   (checkpoint_id, conversation_id, replaced_start_seq, replaced_end_seq,
+                    export_text, export_token_estimate, source_span_ids_json,
+                    hot_ref_ids_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    checkpoint_id,
+                    conversation_id,
+                    replaced_start_seq,
+                    replaced_end_seq,
+                    export_text,
+                    token_estimate,
+                    json.dumps(source_span_ids),
+                    json.dumps(hot_ref_ids),
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE context_conversations SET active_checkpoint_id=?, updated_at=? WHERE conversation_id=?",
+                (checkpoint_id, now, conversation_id),
+            )
+
+    def get_active_context_checkpoint(
+        self, conversation_id: str
+    ) -> Optional[Dict[str, Any]]:
+        row = (
+            self._get_conn()
+            .execute(
+                """SELECT c.* FROM context_checkpoints c
+               JOIN context_conversations conv ON conv.active_checkpoint_id = c.checkpoint_id
+               WHERE conv.conversation_id=?""",
+                (conversation_id,),
+            )
+            .fetchone()
+        )
+        return dict(row) if row else None
+
+    def search_context_refs(
+        self, conversation_id: str, query: str, limit: int = 8
+    ) -> List[Dict[str, Any]]:
+        normalized_query = self._normalize_fts_query(query)
+        if not normalized_query:
+            return []
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT r.* FROM context_refs r
+               JOIN context_refs_fts fts ON r.rowid = fts.rowid
+               WHERE context_refs_fts MATCH ? AND r.conversation_id=?
+               ORDER BY r.salience DESC, rank
+               LIMIT ?""",
+                (normalized_query, conversation_id, limit),
+            )
+            .fetchall()
+        )
+        return [dict(row) for row in rows]
+
+    def search_context_messages(
+        self, conversation_id: str, query: str, limit: int = 8
+    ) -> List[Dict[str, Any]]:
+        normalized_query = self._normalize_fts_query(query)
+        if not normalized_query:
+            return []
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT m.* FROM context_messages m
+               JOIN context_messages_fts fts ON m.id = fts.rowid
+               WHERE context_messages_fts MATCH ? AND m.conversation_id=?
+               ORDER BY m.seq DESC
+               LIMIT ?""",
+                (normalized_query, conversation_id, limit),
+            )
+            .fetchall()
+        )
+        return [dict(row) for row in rows]
+
+    def get_context_messages_by_seq_range(
+        self, conversation_id: str, start_seq: int, end_seq: int
+    ) -> List[Dict[str, Any]]:
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM context_messages
+               WHERE conversation_id=? AND seq BETWEEN ? AND ?
+               ORDER BY seq ASC""",
+                (conversation_id, start_seq, end_seq),
+            )
+            .fetchall()
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _message_text_content(message: Dict[str, Any]) -> str:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or ""
+                    if isinstance(text, str) and text:
+                        chunks.append(text)
+            return "\n".join(chunks)
+        return str(content or "")
 
     def close(self) -> None:
         if hasattr(self._local, "conn") and self._local.conn:

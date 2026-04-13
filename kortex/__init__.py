@@ -20,7 +20,7 @@ def register(ctx) -> None:
     if getattr(config, "context_engine_enabled", True) and hasattr(
         ctx, "register_context_engine"
     ):
-        ctx.register_context_engine(KortexContextEngine())
+        ctx.register_context_engine(KortexContextEngine(db_path=config.db_path))
     if hasattr(ctx, "register_memory_provider"):
         ctx.register_memory_provider(provider)
     else:
