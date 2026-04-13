@@ -6,6 +6,7 @@ import hashlib
 from collections import deque
 from typing import Dict, List, Set, Tuple
 
+from .db import DEFAULT_USER_ID
 from .db import KortexDB
 from .models import Episode
 
@@ -16,45 +17,62 @@ class Linker:
     def __init__(self, db: KortexDB):
         self._db = db
 
-    def link_episode_to_facts(self, episode_id: int, fact_ids: List[int]) -> int:
+    def link_episode_to_facts(
+        self, episode_id: int, fact_ids: List[int], user_id: str = DEFAULT_USER_ID
+    ) -> int:
         """Create episode→fact links. Returns count of links created."""
         created = 0
         for fact_id in self._unique_positive_ids(fact_ids):
             created += self._create_link(
-                "episode", episode_id, "fact", fact_id, "extracted_from"
+                "episode",
+                episode_id,
+                "fact",
+                fact_id,
+                "extracted_from",
+                user_id=user_id,
             )
             for old_fact in self._db.get_facts_superseded_by(fact_id, limit=10):
                 if old_fact.id:
-                    self.link_superseded_facts(old_fact.id, fact_id)
+                    self.link_superseded_facts(old_fact.id, fact_id, user_id=user_id)
         return created
 
     def link_episode_to_reflections(
-        self, episode_id: int, reflection_ids: List[int]
+        self,
+        episode_id: int,
+        reflection_ids: List[int],
+        user_id: str = DEFAULT_USER_ID,
     ) -> int:
         """Create episode→reflection links. Returns count of links created."""
         created = 0
         for reflection_id in self._unique_positive_ids(reflection_ids):
             created += self._create_link(
-                "episode", episode_id, "reflection", reflection_id, "triggered"
+                "episode",
+                episode_id,
+                "reflection",
+                reflection_id,
+                "triggered",
+                user_id=user_id,
             )
         return created
 
-    def link_related_episodes(self, episode: Episode, max_lookback: int = 50) -> int:
+    def link_related_episodes(
+        self, episode: Episode, max_lookback: int = 50, user_id: str = DEFAULT_USER_ID
+    ) -> int:
         """Find and link related episodes by shared entities/topics. Returns count."""
         if not episode.id:
             return 0
 
-        created = self._link_entities_to_episode(episode)
+        created = self._link_entities_to_episode(episode, user_id=user_id)
         tokens = self._episode_tokens(episode)
         if not tokens:
             return created
 
-        recent = self._db.get_recent_episodes(limit=max_lookback + 1)
+        recent = self._db.get_recent_episodes(limit=max_lookback + 1, user_id=user_id)
         for other in recent:
             if not other.id or other.id == episode.id:
                 continue
 
-            self._link_entities_to_episode(other)
+            self._link_entities_to_episode(other, user_id=user_id)
             other_tokens = self._episode_tokens(other)
             if not other_tokens:
                 continue
@@ -64,33 +82,57 @@ class Linker:
                 continue
 
             created += self._create_link(
-                "episode", episode.id, "episode", other.id, "related_to", weight=score
+                "episode",
+                episode.id,
+                "episode",
+                other.id,
+                "related_to",
+                weight=score,
+                user_id=user_id,
             )
             created += self._create_link(
-                "episode", other.id, "episode", episode.id, "related_to", weight=score
+                "episode",
+                other.id,
+                "episode",
+                episode.id,
+                "related_to",
+                weight=score,
+                user_id=user_id,
             )
 
         return created
 
-    def link_superseded_facts(self, old_fact_id: int, new_fact_id: int) -> None:
+    def link_superseded_facts(
+        self, old_fact_id: int, new_fact_id: int, user_id: str = DEFAULT_USER_ID
+    ) -> None:
         """Create fact→fact supersession link."""
         if old_fact_id <= 0 or new_fact_id <= 0:
             return
-        self._create_link("fact", old_fact_id, "fact", new_fact_id, "supersedes")
+        self._create_link(
+            "fact", old_fact_id, "fact", new_fact_id, "supersedes", user_id=user_id
+        )
 
-    def link_contradicting_facts(self, old_fact_id: int, new_fact_id: int) -> None:
+    def link_contradicting_facts(
+        self, old_fact_id: int, new_fact_id: int, user_id: str = DEFAULT_USER_ID
+    ) -> None:
         """Create fact↔fact contradiction links."""
         if old_fact_id <= 0 or new_fact_id <= 0:
             return
-        self._create_link("fact", old_fact_id, "fact", new_fact_id, "contradicts")
-        self._create_link("fact", new_fact_id, "fact", old_fact_id, "contradicts")
+        self._create_link(
+            "fact", old_fact_id, "fact", new_fact_id, "contradicts", user_id=user_id
+        )
+        self._create_link(
+            "fact", new_fact_id, "fact", old_fact_id, "contradicts", user_id=user_id
+        )
 
-    def link_episode_to_loops(self, episode_id: int, loop_ids: List[int]) -> int:
+    def link_episode_to_loops(
+        self, episode_id: int, loop_ids: List[int], user_id: str = DEFAULT_USER_ID
+    ) -> int:
         """Create episode→open_loop resolution links."""
         created = 0
         for loop_id in self._unique_positive_ids(loop_ids):
             created += self._create_link(
-                "episode", episode_id, "open_loop", loop_id, "resolves"
+                "episode", episode_id, "open_loop", loop_id, "resolves", user_id=user_id
             )
         return created
 
@@ -99,7 +141,11 @@ class Linker:
         return [
             link["dst_id"]
             for link in self._db.get_links_from(
-                "episode", episode_id, relation="related_to", limit=limit
+                "episode",
+                episode_id,
+                relation="related_to",
+                limit=limit,
+                user_id=DEFAULT_USER_ID,
             )
             if link["dst_type"] == "episode"
         ]
@@ -109,17 +155,23 @@ class Linker:
         return [
             link["dst_id"]
             for link in self._db.get_links_from(
-                "episode", episode_id, relation="extracted_from", limit=100
+                "episode",
+                episode_id,
+                relation="extracted_from",
+                limit=100,
+                user_id=DEFAULT_USER_ID,
             )
             if link["dst_type"] == "fact"
         ]
 
-    def get_fact_episodes(self, fact_id: int) -> List[int]:
+    def get_fact_episodes(
+        self, fact_id: int, user_id: str = DEFAULT_USER_ID
+    ) -> List[int]:
         """Get episode IDs where this fact was extracted."""
         return [
             link["src_id"]
             for link in self._db.get_links_to(
-                "fact", fact_id, relation="extracted_from", limit=100
+                "fact", fact_id, relation="extracted_from", limit=100, user_id=user_id
             )
             if link["src_type"] == "episode"
         ]
@@ -130,6 +182,7 @@ class Linker:
         max_hops: int = 2,
         max_results: int = 50,
         hop_decay: float = 0.5,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[dict]:
         """Traverse the memory graph from seed entities and return ranked nodes."""
         seeds = [
@@ -148,7 +201,7 @@ class Linker:
                 continue
 
             for next_type, next_id, relation, edge_weight in self._neighbors(
-                node_type, node_id
+                node_type, node_id, user_id=user_id
             ):
                 next_score = (
                     score * hop_decay * edge_weight * self._relation_weight(relation)
@@ -169,7 +222,9 @@ class Linker:
         ranked.sort(key=lambda item: item["score"], reverse=True)
         return ranked[:max_results]
 
-    def _link_entities_to_episode(self, episode: Episode) -> int:
+    def _link_entities_to_episode(
+        self, episode: Episode, user_id: str = DEFAULT_USER_ID
+    ) -> int:
         if not episode.id:
             return 0
         created = 0
@@ -180,18 +235,26 @@ class Linker:
                 "episode",
                 episode.id,
                 "co_occurs",
+                user_id=user_id,
             )
         return created
 
     def _neighbors(
-        self, node_type: str, node_id: int
+        self,
+        node_type: str,
+        node_id: int,
+        user_id: str = DEFAULT_USER_ID,
     ) -> List[Tuple[str, int, str, float]]:
         neighbors: List[Tuple[str, int, str, float]] = []
-        for link in self._db.get_links_from(node_type, node_id, limit=100):
+        for link in self._db.get_links_from(
+            node_type, node_id, limit=100, user_id=user_id
+        ):
             neighbors.append(
                 (link["dst_type"], link["dst_id"], link["relation"], link["weight"])
             )
-        for link in self._db.get_links_to(node_type, node_id, limit=100):
+        for link in self._db.get_links_to(
+            node_type, node_id, limit=100, user_id=user_id
+        ):
             neighbors.append(
                 (link["src_type"], link["src_id"], link["relation"], link["weight"])
             )
@@ -205,13 +268,22 @@ class Linker:
         dst_id: int,
         relation: str,
         weight: float = 1.0,
+        user_id: str = DEFAULT_USER_ID,
     ) -> int:
         if src_id <= 0 or dst_id <= 0:
             return 0
-        if self._db.link_exists(src_type, src_id, dst_type, dst_id, relation):
+        if self._db.link_exists(
+            src_type, src_id, dst_type, dst_id, relation, user_id=user_id
+        ):
             return 0
         self._db.insert_link(
-            src_type, src_id, dst_type, dst_id, relation, weight=weight
+            src_type,
+            src_id,
+            dst_type,
+            dst_id,
+            relation,
+            weight=weight,
+            user_id=user_id,
         )
         return 1
 

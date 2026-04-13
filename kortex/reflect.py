@@ -292,6 +292,7 @@ def process_reflections(
     assistant_text: str,
     affect: AffectSignal,
     episode_id: int,
+    user_id: str = "__default__",
 ) -> List[Reflection]:
     """Main entry point: extract and store/reinforce reflections from a turn.
 
@@ -307,6 +308,7 @@ def process_reflections(
             text=mistake_text,
             episode_id=episode_id,
             base_confidence=0.4 if affect.frustration > 0.3 else 0.3,
+            user_id=user_id,
         )
         if ref:
             created.append(ref)
@@ -319,6 +321,7 @@ def process_reflections(
             text=success_text,
             episode_id=episode_id,
             base_confidence=0.4 if affect.warmth > 0.3 else 0.3,
+            user_id=user_id,
         )
         if ref:
             created.append(ref)
@@ -331,6 +334,7 @@ def process_reflections(
             text=pref_text,
             episode_id=episode_id,
             base_confidence=0.5,  # explicit preferences start higher
+            user_id=user_id,
         )
         if ref:
             created.append(ref)
@@ -338,6 +342,7 @@ def process_reflections(
     # 4. Identity directives → stored as IdentityDelta, not Reflection
     for kind, directive_text in extract_identity_directives(user_text):
         delta = IdentityDelta(
+            user_id=user_id,
             text=f"[{kind}] {directive_text}",
             confidence=0.5,
             source_episode_id=episode_id,
@@ -354,6 +359,7 @@ def _store_or_reinforce(
     text: str,
     episode_id: int,
     base_confidence: float = 0.3,
+    user_id: str = "__default__",
 ) -> Optional[Reflection]:
     """Store a new reflection or reinforce an existing similar one."""
     text = text.strip()
@@ -363,7 +369,7 @@ def _store_or_reinforce(
         text = text[:_MAX_REFLECTION_LENGTH]
 
     # Check for existing similar reflection
-    existing = _find_similar_reflection(db, kind, text)
+    existing = _find_similar_reflection(db, kind, text, user_id=user_id)
     if existing:
         # Reinforce: boost confidence and update timestamp
         db.reinforce_reflection(existing.id, confidence_boost=0.1)
@@ -377,6 +383,7 @@ def _store_or_reinforce(
 
     # New reflection
     ref = Reflection(
+        user_id=user_id,
         kind=kind,
         text=text,
         confidence=base_confidence,
@@ -388,10 +395,10 @@ def _store_or_reinforce(
 
 
 def _find_similar_reflection(
-    db: KortexDB, kind: str, text: str
+    db: KortexDB, kind: str, text: str, user_id: str = "__default__"
 ) -> Optional[Reflection]:
     """Find an existing reflection that's similar enough to reinforce."""
-    existing = db.get_reflections(kind=kind, limit=50)
+    existing = db.get_reflections(kind=kind, limit=50, user_id=user_id)
 
     for ref in existing:
         if _reflections_similar(ref.text, text):
@@ -399,7 +406,7 @@ def _find_similar_reflection(
 
     # Also try FTS search for broader matching
     try:
-        fts_matches = db.search_reflections(text, limit=5)
+        fts_matches = db.search_reflections(text, limit=5, user_id=user_id)
         for ref in fts_matches:
             if ref.kind == kind and _reflections_similar(ref.text, text):
                 return ref

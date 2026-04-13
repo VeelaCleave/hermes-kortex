@@ -20,8 +20,10 @@ class Consolidator:
         self._linker = linker
         self._config = config
 
-    def maybe_consolidate(self) -> Dict[str, int | bool | List[int]]:
-        active_count = self._db.count_unconsolidated_episodes()
+    def maybe_consolidate(
+        self, user_id: str = DEFAULT_USER_ID
+    ) -> Dict[str, int | bool | List[int]]:
+        active_count = self._db.count_unconsolidated_episodes(user_id=user_id)
         if active_count <= self._config.consolidation_threshold:
             return {
                 "triggered": False,
@@ -32,15 +34,21 @@ class Consolidator:
                 "summary_episodes_created": 0,
             }
 
-        result = self.consolidate(limit=self._config.consolidation_batch_size)
+        result = self.consolidate(
+            limit=self._config.consolidation_batch_size, user_id=user_id
+        )
         result["triggered"] = True
         result["active_episodes"] = active_count
         result["threshold"] = self._config.consolidation_threshold
         return result
 
-    def consolidate(self, limit: int | None = None) -> Dict[str, int | List[int]]:
+    def consolidate(
+        self, limit: int | None = None, user_id: str = DEFAULT_USER_ID
+    ) -> Dict[str, int | List[int]]:
         batch_limit = limit or self._config.consolidation_batch_size
-        episodes = self._db.get_unconsolidated_episodes(limit=batch_limit)
+        episodes = self._db.get_unconsolidated_episodes(
+            limit=batch_limit, user_id=user_id
+        )
         if not episodes:
             return {
                 "summary_episode_ids": [],
@@ -58,7 +66,7 @@ class Consolidator:
 
         for session_id, session_episodes in grouped.items():
             summary_episode_id = self._create_summary_episode(
-                session_id, session_episodes
+                session_id, session_episodes, user_id=user_id
             )
             if not summary_episode_id:
                 continue
@@ -90,12 +98,15 @@ class Consolidator:
         }
 
     def _create_summary_episode(
-        self, session_id: str, session_episodes: List[Episode]
+        self,
+        session_id: str,
+        session_episodes: List[Episode],
+        user_id: str = DEFAULT_USER_ID,
     ) -> Optional[int]:
         if not session_episodes:
             return None
 
-        latest_summary = self._latest_summary_for_session(session_id)
+        latest_summary = self._latest_summary_for_session(session_id, user_id=user_id)
         summary_text = None
         key_entities = ""
         if latest_summary:
@@ -151,8 +162,14 @@ class Consolidator:
 
         return summary_episode_id
 
-    def _latest_summary_for_session(self, session_id: str) -> Optional[dict]:
-        summaries = self._db.list_conversation_summaries(limit=1, session_id=session_id)
+    def _latest_summary_for_session(
+        self, session_id: str, user_id: str = DEFAULT_USER_ID
+    ) -> Optional[dict]:
+        summaries = self._db.list_conversation_summaries(
+            limit=1,
+            session_id=session_id,
+            user_id=user_id,
+        )
         return summaries[0] if summaries else None
 
     def _copy_links(
@@ -166,7 +183,7 @@ class Consolidator:
 
         for source_episode_id in source_episode_ids:
             for link in self._db.get_links_from(
-                "episode", source_episode_id, limit=None
+                "episode", source_episode_id, limit=None, user_id=user_id
             ):
                 destination_type = link["dst_type"]
                 destination_id = link["dst_id"]
@@ -194,6 +211,7 @@ class Consolidator:
                     destination_type,
                     destination_id,
                     link["relation"],
+                    user_id=user_id,
                 ):
                     copied_edges.add(edge)
                     continue
@@ -208,7 +226,9 @@ class Consolidator:
                     user_id=user_id,
                 )
 
-            for link in self._db.get_links_to("episode", source_episode_id, limit=None):
+            for link in self._db.get_links_to(
+                "episode", source_episode_id, limit=None, user_id=user_id
+            ):
                 source_type = link["src_type"]
                 source_id = link["src_id"]
                 if source_type == "episode":
@@ -230,6 +250,7 @@ class Consolidator:
                     "episode",
                     summary_episode_id,
                     link["relation"],
+                    user_id=user_id,
                 ):
                     copied_edges.add(edge)
                     continue

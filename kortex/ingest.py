@@ -223,6 +223,7 @@ class Ingestor:
         user_text: str,
         assistant_text: str,
         session_id: str = "",
+        user_id: str = "__default__",
         extract: bool = True,
     ) -> Episode:
         with self._lock:
@@ -232,6 +233,7 @@ class Ingestor:
         combined = f"{user_text} {assistant_text}"
 
         ep = Episode(
+            user_id=user_id,
             session_id=session_id,
             turn_index=count,
             timestamp=now_epoch(),
@@ -258,12 +260,15 @@ class Ingestor:
         ep.id = self._db.insert_episode(ep)
         return ep
 
-    def extract_open_loops(self, user_text: str, episode_id: int) -> List[OpenLoop]:
+    def extract_open_loops(
+        self, user_text: str, episode_id: int, user_id: str = "__default__"
+    ) -> List[OpenLoop]:
         structured = self._extract_structured_memory(user_text, "")
         if structured and structured.get("open_loops"):
             loops = []
             for item in structured["open_loops"]:
                 loop = OpenLoop(
+                    user_id=user_id,
                     kind=item.get("kind", "question"),
                     text=item.get("text", "")[:300],
                     source_episode_id=episode_id,
@@ -279,6 +284,7 @@ class Ingestor:
             if match:
                 text = match.group(0).strip()[:300]
                 loop = OpenLoop(
+                    user_id=user_id,
                     kind="commitment",
                     text=text,
                     source_episode_id=episode_id,
@@ -292,6 +298,7 @@ class Ingestor:
             if match:
                 text = match.group(0).strip()[:300]
                 loop = OpenLoop(
+                    user_id=user_id,
                     kind="question",
                     text=text,
                     source_episode_id=episode_id,
@@ -302,7 +309,9 @@ class Ingestor:
 
         return loops
 
-    def extract_facts(self, user_text: str, episode_id: int) -> List[Fact]:
+    def extract_facts(
+        self, user_text: str, episode_id: int, user_id: str = "__default__"
+    ) -> List[Fact]:
         """Extract durable facts from user text and deduplicate against existing facts."""
         structured = self._extract_structured_memory(user_text, "")
         candidates = self._extract_fact_candidates(user_text)
@@ -325,7 +334,7 @@ class Ingestor:
             if object_text.lower() in _FACT_STOPWORDS:
                 continue
 
-            existing = self._find_matching_fact(predicate, object_text)
+            existing = self._find_matching_fact(predicate, object_text, user_id=user_id)
 
             if existing:
                 if self._facts_are_equivalent(existing.object_text, object_text):
@@ -335,6 +344,7 @@ class Ingestor:
                     results.append(existing)
                 else:
                     new_fact = Fact(
+                        user_id=user_id,
                         subject_type="user",
                         predicate=predicate,
                         object_text=object_text[:500],
@@ -352,6 +362,7 @@ class Ingestor:
                     )
             else:
                 new_fact = Fact(
+                    user_id=user_id,
                     subject_type="user",
                     predicate=predicate,
                     object_text=object_text[:500],
@@ -364,11 +375,14 @@ class Ingestor:
         return results
 
     def resolve_answered_loops(
-        self, assistant_text: str, resolving_episode_id: Optional[int] = None
+        self,
+        assistant_text: str,
+        resolving_episode_id: Optional[int] = None,
+        user_id: str = "__default__",
     ) -> List[OpenLoop]:
         """Auto-resolve open question loops if the assistant answered them."""
         resolved = []
-        open_loops = self._db.get_open_loops(limit=20)
+        open_loops = self._db.get_open_loops(limit=20, user_id=user_id)
 
         for loop in open_loops:
             if loop.kind != "question":
@@ -413,7 +427,10 @@ class Ingestor:
         return resolved
 
     def resolve_completed_commitments(
-        self, assistant_text: str, resolving_episode_id: Optional[int] = None
+        self,
+        assistant_text: str,
+        resolving_episode_id: Optional[int] = None,
+        user_id: str = "__default__",
     ) -> List[OpenLoop]:
         """Resolve commitment loops when assistant confirms completion."""
         _done_signals = re.compile(
@@ -424,7 +441,7 @@ class Ingestor:
             return []
 
         resolved = []
-        open_loops = self._db.get_open_loops(limit=20)
+        open_loops = self._db.get_open_loops(limit=20, user_id=user_id)
 
         for loop in open_loops:
             if loop.kind != "commitment":
@@ -512,15 +529,17 @@ class Ingestor:
             return f"Resolved via assistant response about: {', '.join(fragments)}"
         return f"Resolved via assistant response: {clean_text[:160]}"
 
-    def _find_matching_fact(self, predicate: str, object_text: str) -> Optional[Fact]:
-        existing = self._db.get_facts_by_predicate(predicate, limit=10)
+    def _find_matching_fact(
+        self, predicate: str, object_text: str, user_id: str = "__default__"
+    ) -> Optional[Fact]:
+        existing = self._db.get_facts_by_predicate(predicate, limit=10, user_id=user_id)
         for fact in existing:
             if self._facts_are_related(fact.object_text, object_text):
                 return fact
 
         try:
             similar = self._db.find_similar_facts(
-                object_text, predicate=predicate, limit=3
+                object_text, predicate=predicate, limit=3, user_id=user_id
             )
             if similar:
                 return similar[0]

@@ -30,6 +30,10 @@ class TestIngestTurn:
         assert ep1.turn_index == 0
         assert ep2.turn_index == 1
 
+    def test_ingest_turn_assigns_user_id(self, ingestor):
+        ep = ingestor.ingest_turn("hello", "world", session_id="s1", user_id="alice")
+        assert ep.user_id == "alice"
+
     def test_separate_sessions(self, ingestor):
         ep1 = ingestor.ingest_turn("a", "b", session_id="s1")
         ep2 = ingestor.ingest_turn("c", "d", session_id="s2")
