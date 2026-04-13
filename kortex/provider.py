@@ -22,6 +22,7 @@ from .promote import Promoter
 from .recall import Recall
 from .reflect import process_reflections
 from .relationship import update_relationship
+from .time_utils import epoch_to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -234,8 +235,7 @@ class KortexProvider(MemoryProvider):
                 rel = self._db.get_relationship()
                 days_since = 0.0
                 if rel.total_turns > 0:
-                    delta = ep.timestamp - rel.last_updated
-                    days_since = delta.total_seconds() / 86400
+                    days_since = max(ep.timestamp - rel.last_updated, 0.0) / 86400
                 updated_rel = update_relationship(affect, rel, days_since)
                 self._db.upsert_relationship(updated_rel)
 
@@ -431,7 +431,7 @@ class KortexProvider(MemoryProvider):
                         "id": l.id,
                         "kind": l.kind,
                         "text": l.text,
-                        "created": l.created_at.isoformat(),
+                        "created": epoch_to_iso(l.created_at),
                     }
                     for l in loops
                 ]
@@ -488,7 +488,7 @@ class KortexProvider(MemoryProvider):
                             "id": delta.id,
                             "text": delta.text[:500],
                             "confidence": delta.confidence,
-                            "created_at": delta.created_at.isoformat(),
+                            "created_at": epoch_to_iso(delta.created_at),
                             "source_episode_id": delta.source_episode_id,
                         }
                         for delta in deltas

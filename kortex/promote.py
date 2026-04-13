@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 from .db import KortexDB
 from .models import IdentityDelta
+from .time_utils import epoch_to_iso
 
 _MAX_TRAIT_LENGTH = 500
 _LEARNED_TRAITS_HEADER = "## Learned Traits"
@@ -42,7 +43,7 @@ class Promoter:
             "id": delta.id,
             "text": self._truncate_text(delta.text),
             "confidence": delta.confidence,
-            "created_at": delta.created_at.isoformat(),
+            "created_at": epoch_to_iso(delta.created_at),
             "applied": delta.applied,
             "source_episode_id": delta.source_episode_id,
         }
