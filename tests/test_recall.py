@@ -170,6 +170,49 @@ class TestEpisodeRanking:
         text = ep.to_recall_text()
         assert "(" in text and "UTC" in text
 
+    def test_cold_memory_excluded_from_default_recall(self, kortex_db, recall):
+        cold = Episode(
+            session_id="s1",
+            summary="very old low-salience memory",
+            salience=0.2,
+            timestamp=time.time() - (365 * 86400),
+            last_accessed_at=time.time() - (365 * 86400),
+            retrieval_count=0,
+        )
+        warm = Episode(
+            session_id="s1",
+            summary="recent important memory",
+            salience=0.8,
+            timestamp=time.time() - (2 * 86400),
+        )
+        kortex_db.insert_episode(cold)
+        kortex_db.insert_episode(warm)
+
+        ctx = recall.build_context("memory")
+        assert "recent important memory" in ctx
+        assert "very old low-salience memory" not in ctx
+
+    def test_episode_strength_increases_with_retrievals(self, kortex_db, recall):
+        ep = Episode(
+            session_id="s1",
+            summary="sticky memory",
+            salience=0.4,
+            timestamp=time.time() - (30 * 86400),
+            last_accessed_at=time.time() - (30 * 86400),
+            retrieval_count=0,
+        )
+        boosted = Episode(
+            session_id="s1",
+            summary="boosted memory",
+            salience=0.4,
+            timestamp=time.time() - (30 * 86400),
+            last_accessed_at=time.time() - (1 * 86400),
+            retrieval_count=3,
+        )
+        assert recall._episode_strength(
+            boosted, time.time()
+        ) > recall._episode_strength(ep, time.time())
+
 
 class TestRecallText:
     def test_episode_recall_format(self):

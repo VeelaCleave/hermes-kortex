@@ -92,6 +92,17 @@ class TestEpisodeCRUD:
         assert retrieved.summary == "updated"
         assert retrieved.salience == 0.9
 
+    def test_episode_retrieval_updates_access_metadata(self, kortex_db):
+        ep = Episode(session_id="s1", summary="tracked")
+        kortex_db.insert_episode(ep)
+        before = kortex_db.get_episode(ep.id)
+        assert before.retrieval_count >= 0
+
+        retrieved = kortex_db.get_episode(ep.id)
+        refreshed = kortex_db.get_episode(ep.id)
+        assert refreshed.last_accessed_at is not None
+        assert refreshed.retrieval_count >= retrieved.retrieval_count
+
     def test_count_episodes(self, kortex_db):
         assert kortex_db.count_episodes() == 0
         kortex_db.insert_episode(Episode(session_id="s1"))

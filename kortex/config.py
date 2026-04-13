@@ -38,6 +38,11 @@ class KortexConfig:
     consolidation_batch_size: int = 100
     same_session_recency_boost: float = 2.0
     temporal_query_boost: float = 1.4
+    episode_decay_rate: float = 0.10
+    fact_decay_rate: float = 0.05
+    reflection_decay_rate: float = 0.08
+    cold_memory_threshold: float = 0.1
+    warm_memory_threshold: float = 0.3
 
     # Facts
     max_facts_per_recall: int = 6
@@ -84,6 +89,11 @@ class KortexConfig:
             consolidation_batch_size=data.get("consolidation_batch_size", 100),
             same_session_recency_boost=data.get("same_session_recency_boost", 2.0),
             temporal_query_boost=data.get("temporal_query_boost", 1.4),
+            episode_decay_rate=data.get("episode_decay_rate", 0.10),
+            fact_decay_rate=data.get("fact_decay_rate", 0.05),
+            reflection_decay_rate=data.get("reflection_decay_rate", 0.08),
+            cold_memory_threshold=data.get("cold_memory_threshold", 0.1),
+            warm_memory_threshold=data.get("warm_memory_threshold", 0.3),
             max_facts_per_recall=data.get("max_facts_per_recall", 6),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
             max_loops_per_recall=data.get("max_loops_per_recall", 3),

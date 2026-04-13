@@ -165,6 +165,9 @@ class Recall:
         if query:
             search_results = self._db.search_episodes(query, limit=10)
             candidates.extend(search_results)
+            search_result_ids = {ep.id for ep in search_results if ep.id is not None}
+        else:
+            search_result_ids = set()
 
         salient = self._db.get_salient_episodes(
             min_salience=self._config.salience_threshold,
@@ -179,6 +182,15 @@ class Recall:
 
         scored = []
         for ep in candidates:
+            allows_cold = (
+                temporal_window_days is not None
+                or self._is_explicit_episode_match(query, ep)
+            )
+            if (
+                self._memory_tier(self._episode_strength(ep, now)) == "cold"
+                and not allows_cold
+            ):
+                continue
             score = self._rank_episode(
                 ep,
                 query,
@@ -406,6 +418,36 @@ class Recall:
                 relevance = min(0.5 + overlap * 0.15, 1.0)
 
         return relevance * 0.3 + salience * 0.25 + recency * 0.25 + emotional * 0.2
+
+    def _episode_strength(self, ep: Episode, now: float) -> float:
+        last_access = ep.last_accessed_at or ep.timestamp
+        days_since_access = max((now - last_access) / 86400, 0.0)
+        decay = math.exp(-self._config.episode_decay_rate * days_since_access)
+        retrieval_bonus = 1 + ep.retrieval_count * 0.2
+        return ep.salience * decay * retrieval_bonus
+
+    @staticmethod
+    def _is_explicit_episode_match(query: str, ep: Episode) -> bool:
+        if not query or not ep.summary:
+            return False
+        query_words = {
+            word
+            for word in re.findall(r"[A-Za-z0-9_]+", query.lower())
+            if len(word) > 2
+        }
+        summary_words = {
+            word
+            for word in re.findall(r"[A-Za-z0-9_]+", ep.summary.lower())
+            if len(word) > 2
+        }
+        return len(query_words & summary_words) >= 2
+
+    def _memory_tier(self, strength: float) -> str:
+        if strength < self._config.cold_memory_threshold:
+            return "cold"
+        if strength < self._config.warm_memory_threshold:
+            return "warm"
+        return "active"
 
     @staticmethod
     def _detect_temporal_window_days(query: str) -> Optional[float]:

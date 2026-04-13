@@ -823,6 +823,8 @@ class KortexDB:
             .execute("SELECT * FROM episodes WHERE id=?", (episode_id,))
             .fetchone()
         )
+        if row:
+            self.touch_episode(episode_id)
         return self._row_to_episode(row) if row else None
 
     def get_recent_episodes(
@@ -848,6 +850,7 @@ class KortexDB:
             )
             .fetchall()
         )
+        self.touch_episodes([row["id"] for row in rows])
         return [self._row_to_episode(r) for r in rows]
 
     def search_episodes(
@@ -874,6 +877,7 @@ class KortexDB:
             )
             .fetchall()
         )
+        self.touch_episodes([row["id"] for row in rows])
         return [self._row_to_episode(r) for r in rows]
 
     def get_salient_episodes(
@@ -895,6 +899,7 @@ class KortexDB:
             )
             .fetchall()
         )
+        self.touch_episodes([row["id"] for row in rows])
         return [self._row_to_episode(r) for r in rows]
 
     def count_episodes(self) -> int:
@@ -916,7 +921,28 @@ class KortexDB:
             query += " LIMIT ?"
             params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
+        self.touch_episodes([row["id"] for row in rows])
         return [self._row_to_episode(r) for r in rows]
+
+    def touch_episode(self, episode_id: int) -> None:
+        self.touch_episodes([episode_id])
+
+    def touch_episodes(self, episode_ids: List[int]) -> None:
+        valid_ids = [episode_id for episode_id in episode_ids if episode_id]
+        if not valid_ids:
+            return
+        placeholders = ",".join("?" for _ in valid_ids)
+        now = now_epoch()
+        try:
+            with self._tx() as conn:
+                conn.execute(
+                    f"""UPDATE episodes
+                       SET last_accessed_at=?, retrieval_count=retrieval_count + 1
+                       WHERE id IN ({placeholders})""",
+                    (now, *valid_ids),
+                )
+        except sqlite3.DatabaseError:
+            logger.warning("Skipping episode touch due to database write failure")
 
     def count_unconsolidated_episodes(self) -> int:
         return (
@@ -1191,7 +1217,7 @@ class KortexDB:
     def _normalize_fts_query(text: str) -> str:
         tokens = re.findall(r"[A-Za-z0-9_]+", text.lower())
         filtered = [token for token in tokens if len(token) > 1]
-        return " ".join(filtered)
+        return " OR ".join(filtered)
 
     def count_facts(self, status: str = "active") -> int:
         return (
