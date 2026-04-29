@@ -31,7 +31,25 @@ from .time_utils import now_epoch, parse_timestamp
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "__default__"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# OCEAN personality schema (Big Five: Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
+_OCEAN_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS ocean_profiles (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL DEFAULT '',
+    openness            REAL NOT NULL DEFAULT 0.5,
+    conscientiousness   REAL NOT NULL DEFAULT 0.5,
+    extraversion        REAL NOT NULL DEFAULT 0.5,
+    agreeableness       REAL NOT NULL DEFAULT 0.5,
+    neuroticism         REAL NOT NULL DEFAULT 0.5,
+    confidence          REAL NOT NULL DEFAULT 0.3,
+    turn_count          INTEGER NOT NULL DEFAULT 0,
+    updated_at          REAL NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS idx_ocean_user_id ON ocean_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_ocean_updated ON ocean_profiles(updated_at);
+"""
 
 _SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS episodes (
@@ -504,6 +522,10 @@ class KortexDB:
 
         if from_version < 3:
             self._migrate_v2_to_v3(conn)
+
+        if from_version < 4:
+            conn.executescript(_OCEAN_SCHEMA_SQL)
+            from_version = 4
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._record_schema_version(conn)
@@ -2445,6 +2467,71 @@ class KortexDB:
                         chunks.append(text)
             return "\n".join(chunks)
         return str(content or "")
+
+
+    # ── OCEAN Personality Traits (Big Five) ──────────────────────────────────
+
+    def upsert_ocean_profile(
+        self,
+        user_id: str,
+        openness: float,
+        conscientiousness: float,
+        extraversion: float,
+        agreeableness: float,
+        neuroticism: float,
+        confidence: float,
+        turn_count: int,
+    ) -> None:
+        """Upsert an OCEAN personality profile for a user."""
+        now = now_epoch()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """SELECT id FROM ocean_profiles WHERE user_id=?""",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                conn.execute(
+                    """UPDATE ocean_profiles
+                       SET openness=?, conscientiousness=?, extraversion=?,
+                           agreeableness=?, neuroticism=?, confidence=?,
+                           turn_count=?, updated_at=?
+                       WHERE user_id=?""",
+                    (openness, conscientiousness, extraversion,
+                     agreeableness, neuroticism, confidence,
+                     turn_count, now, user_id),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO ocean_profiles
+                       (user_id, openness, conscientiousness, extraversion,
+                        agreeableness, neuroticism, confidence, turn_count, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, openness, conscientiousness, extraversion,
+                     agreeableness, neuroticism, confidence, turn_count, now),
+                )
+
+    def get_ocean_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get the current OCEAN personality profile for a user."""
+        row = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM ocean_profiles WHERE user_id=?""",
+                (user_id,),
+            )
+            .fetchone()
+        )
+        return dict(row) if row else None
+
+    def get_ocean_profiles_summary(self) -> List[Dict[str, Any]]:
+        """Get OCEAN profiles for status display."""
+        rows = self._get_conn().execute(
+            """SELECT user_id, openness, conscientiousness, extraversion,
+                      agreeableness, neuroticism, confidence, turn_count, updated_at
+               FROM ocean_profiles
+               ORDER BY updated_at DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         if hasattr(self._local, "conn") and self._local.conn:

@@ -28,6 +28,7 @@ from .relationship import update_relationship
 from .summaries import build_conversation_summary
 from .time_utils import epoch_to_display, epoch_to_iso
 from .export import export_to_json, import_from_json
+from .ocean import score_turn as score_ocean_turn
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,9 @@ class KortexProvider(MemoryProvider):
                 if self._consolidator:
                     self._consolidator.maybe_consolidate(user_id=self._user_id)
 
+                # ── OCEAN personality scoring ────────────────────────────
+                self._update_ocean(user_content, assistant_content)
+
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
                     ep.turn_index,
@@ -369,6 +373,50 @@ class KortexProvider(MemoryProvider):
                 logger.exception("KORTEX sync_turn failed")
 
         threading.Thread(target=_bg, daemon=True).start()
+
+    def _update_ocean(self, user_content: str, assistant_content: str) -> None:
+        """Update OCEAN personality profile for the current user."""
+        if not self._db:
+            return
+        try:
+            # Get existing profile or start fresh
+            existing = self._db.get_ocean_profile(self._user_id)
+            if existing:
+                current = self._make_ocean_score(existing)
+            else:
+                from .ocean import OCEANScore
+                current = OCEANScore()
+
+            # Score this turn and smooth
+            scored = score_ocean_turn(user_content, assistant_content, current)
+
+            # Persist to DB
+            self._db.upsert_ocean_profile(
+                user_id=self._user_id,
+                openness=scored.openness,
+                conscientiousness=scored.conscientiousness,
+                extraversion=scored.extraversion,
+                agreeableness=scored.agreeableness,
+                neuroticism=scored.neuroticism,
+                confidence=scored.confidence,
+                turn_count=scored.turn_count,
+            )
+        except Exception:
+            logger.exception("KORTEX _update_ocean failed")
+
+    def _make_ocean_score(self, data: Dict[str, Any]) -> Any:
+        """Reconstruct an OCEANScore from DB row."""
+        from .ocean import OCEANScore
+        return OCEANScore(
+            openness=data.get("openness", 0.5),
+            conscientiousness=data.get("conscientiousness", 0.5),
+            extraversion=data.get("extraversion", 0.5),
+            agreeableness=data.get("agreeableness", 0.5),
+            neuroticism=data.get("neuroticism", 0.5),
+            confidence=data.get("confidence", 0.5),
+            turn_count=data.get("turn_count", 0),
+            user_id=data.get("user_id", self._user_id),
+        )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [KORTEX_SEARCH_SCHEMA, KORTEX_IDENTITY_SCHEMA, KORTEX_EXPORT_SCHEMA]

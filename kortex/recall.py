@@ -63,6 +63,12 @@ class Recall:
             sections.append(rel_text)
             budget_used += self._estimate_tokens(rel_text)
 
+        # ── OCEAN personality profile ──────────────────────────────────
+        ocean_text = self._build_ocean_section(user_id=user_id)
+        if ocean_text:
+            sections.append(ocean_text)
+            budget_used += self._estimate_tokens(ocean_text)
+
         facts_budget = self._config.budget.get("stable_facts", 400)
         facts_text = self._build_facts_section(selected_facts, facts_budget)
         if facts_text:
@@ -629,6 +635,37 @@ class Recall:
         if unit.startswith("week"):
             return value * 7.0
         return value * 30.0
+
+    def _build_ocean_section(self, user_id: str) -> str:
+        """Build the OCEAN personality profile section for recall context."""
+        try:
+            profile = self._db.get_ocean_profile(user_id)
+            if not profile or profile.get("turn_count", 0) < 2:
+                return ""
+
+            openness = profile.get("openness", 0.5)
+            conscientiousness = profile.get("conscientiousness", 0.5)
+            extraversion = profile.get("extraversion", 0.5)
+            agreeableness = profile.get("agreeableness", 0.5)
+            neuroticism = profile.get("neuroticism", 0.5)
+            confidence = profile.get("confidence", 0.5)
+            turn_count = profile.get("turn_count", 1)
+
+            # Format as compact bar chart
+            def bar(score):
+                return "█" * int(score * 10) + "░" * (10 - int(score * 10))
+
+            lines = [
+                f"OCEAN profile ({turn_count} turns, {confidence:.0%} confidence):",
+                f"  Openness:          {bar(openness)} {openness:.2f}",
+                f"  Conscientiousness: {bar(conscientiousness)} {conscientiousness:.2f}",
+                f"  Extraversion:      {bar(extraversion)} {extraversion:.2f}",
+                f"  Agreeableness:     {bar(agreeableness)} {agreeableness:.2f}",
+                f"  Neuroticism:       {bar(neuroticism)} {neuroticism:.2f}",
+            ]
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
