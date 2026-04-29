@@ -2288,6 +2288,42 @@ class KortexDB:
                 ),
             )
 
+    def batch_insert_context_refs(
+        self,
+        conversation_id: str,
+        refs: List[Dict[str, Any]],
+    ) -> None:
+        """Batch insert context refs in a single transaction (Fix #2: streaming refs).
+
+        Replaces N individual INSERT calls with one bulk EXECUTEMANY,
+        reducing WAL contention and FTS5 trigger overhead.
+        """
+        if not refs:
+            return
+        created_at = now_epoch()
+        rows = []
+        for ref in refs:
+            rows.append((
+                ref["ref_id"],
+                conversation_id,
+                ref["ref_type"],
+                ref["label"],
+                json.dumps(ref["payload"], ensure_ascii=False, sort_keys=True),
+                ref.get("source_span_id"),
+                ref.get("salience", 0.0),
+                ref.get("open_state", "open"),
+                ref["ref_id"],
+                created_at,
+            ))
+
+        with self._tx() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO context_refs
+                   (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM context_refs WHERE ref_id=?), ?))""",
+                rows,
+            )
+
     def insert_context_checkpoint(
         self,
         conversation_id: str,

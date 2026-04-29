@@ -306,7 +306,7 @@ class KortexContextEngine(HermesContextEngine):
             text_blob,
             flags=re.IGNORECASE,
         )
-        files = sorted(set(re.findall(r"(?:[\w.-]+/)+[\w.-]+", text_blob)))
+        files = sorted(set(re.findall(r"(?:(\w.-)+/)+[\w.-]+", text_blob)))
         errors = re.findall(
             r"\b(?:error|failed|exception|traceback)\b.*",
             text_blob,
@@ -337,17 +337,8 @@ class KortexContextEngine(HermesContextEngine):
                 )
             )
 
-        for ref in refs:
-            self._db.insert_context_ref(
-                self._conversation_id,
-                ref_id=ref["ref_id"],
-                ref_type=ref["ref_type"],
-                label=ref["label"],
-                payload=ref["payload"],
-                source_span_id=source_span_id,
-                salience=ref["salience"],
-                open_state=ref["open_state"],
-            )
+        # Batch insert all refs in a single transaction (Fix #2: streaming refs)
+        self._db.batch_insert_context_refs(self._conversation_id, refs)
         return refs
 
     def _make_ref(

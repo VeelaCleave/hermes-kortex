@@ -434,64 +434,57 @@ class KortexProvider(MemoryProvider):
         logger.info("KORTEX session ended with %d messages", len(messages))
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Pre-compression hook: archive middle messages and return reduced list.
+
+        CRITICAL: Must return a REDUCED message list (or empty string to skip).
+        Hermes uses this return value to replace the full context — returning
+        JSON text caused the LLM compressor to still process ALL messages and
+        time out. The fix: delegate to context_engine.compress() which returns
+        [head + checkpoint + tail].
+        """
         if not self._db:
             return ""
-        # Wire up lossless archival from KortexContextEngine
-        from .context_engine import KortexContextEngine
-        
-        engine = KortexContextEngine(
-            db_path=self._config.db_path,
-            user_id=self._user_id
-        )
-        
-        # Archive the middle messages (protect first/last)
-        protected_head = messages[:engine.protect_first_n]
-        protected_tail = messages[-engine.protect_last_n:]
-        middle = messages[engine.protect_first_n:len(messages)-engine.protect_last_n]
-        
-        if middle:
-            result = engine.compress(
-                messages=messages,
-                focus_topic=self._config.focus_topic or "",
+
+        try:
+            from .context_engine import KortexContextEngine
+
+            if not messages or len(messages) < 2:
+                return ""
+
+            engine = KortexContextEngine(
+                db_path=self._config.db_path,
+                user_id=self._user_id
             )
-            
-            # Return the reconstructed list with checkpoint
-            return json.dumps({
-                "archived": len(middle),
-                "protected_head": len(protected_head),
-                "protected_tail": len(protected_tail),
-                "checkpoint": result[-1] if result else None,
-            })
-        
-        return json.dumps({"skipped": True, "reason": "No middle messages to archive"})
-        # Wire up lossless archival from KortexContextEngine
-        from .context_engine import KortexContextEngine
-        
-        engine = KortexContextEngine(
-            db_path=self._config.db_path,
-            user_id=self._user_id
-        )
-        
-        # Archive the middle messages (protect first/last)
-        protected_head = messages[:engine.protect_first_n]
-        protected_tail = messages[-engine.protect_last_n:]
-        middle = messages[engine.protect_first_n:len(messages)-engine.protect_last_n]
-        
-        if middle:
-            result = engine.compress(
-                messages=messages,
-                focus_topic=self._config.focus_topic or "",
-            )
-            
-            # Return the reconstructed list with checkpoint
-            return json.dumps({
-                "archived": len(middle),
-                "protected_head": len(protected_head),
-                "protected_tail": len(protected_tail),
-                "checkpoint": result[-1] if result else None,
-            })
-        
-        return json.dumps({"skipped": True, "reason": "No middle messages to archive"})
+
+            # Timeout guard: if compress() takes >2s, fall through
+            import signal
+
+            def _timeout_handler(signum, frame):
+                raise TimeoutError("KORTEX compress took > 2s")
+
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(2)
+            try:
+                result = engine.compress(
+                    messages=messages,
+                    focus_topic=self._config.focus_topic or "",
+                )
+            except TimeoutError:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+                logger.warning("KORTEX compress timed out (>2s), injecting marker only")
+                return "⚠ Compression summary failed: Request timed out. Inserted a fallback context marker."
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+
+            # engine.compress() returns [head + checkpoint + tail]
+            # Return as JSON-serializable list for Hermes to use directly
+            return json.dumps(result)
+
+        except Exception as e:
+            logger.error("KORTEX on_pre_compress failed: %s", e)
+            return "⚠ Compression summary failed: Request timed out. Inserted a fallback context marker."
 
     def on_memory_write(
         self,
