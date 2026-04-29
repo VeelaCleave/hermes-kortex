@@ -167,7 +167,7 @@ except ImportError:
         def initialize(self, session_id: str, **kwargs) -> None:
             pass
 
-        def get_tool_schemas(self) -> list:
+        def get_tool_schemas(self):
             return []
 
 
@@ -198,7 +198,10 @@ class KortexProvider(MemoryProvider):
         self._session_id = session_id
         self._hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
         self._agent_context = kwargs.get("agent_context", "primary")
+        agent_identity = kwargs.get("agent_identity", "")
         self._user_id = kwargs.get("user_id", DEFAULT_USER_ID)
+        if agent_identity and self._user_id == DEFAULT_USER_ID:
+            self._user_id = agent_identity
 
         db_path = self._config.db_path
         if not db_path:
@@ -433,23 +436,153 @@ class KortexProvider(MemoryProvider):
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
         if not self._db:
             return ""
-        logger.info("KORTEX pre-compress with %d messages", len(messages))
-        return ""
+        # Wire up lossless archival from KortexContextEngine
+        from .context_engine import KortexContextEngine
+        
+        engine = KortexContextEngine(
+            db_path=self._config.db_path,
+            user_id=self._user_id
+        )
+        
+        # Archive the middle messages (protect first/last)
+        protected_head = messages[:engine.protect_first_n]
+        protected_tail = messages[-engine.protect_last_n:]
+        middle = messages[engine.protect_first_n:len(messages)-engine.protect_last_n]
+        
+        if middle:
+            result = engine.compress(
+                messages=messages,
+                focus_topic=self._config.focus_topic or "",
+            )
+            
+            # Return the reconstructed list with checkpoint
+            return json.dumps({
+                "archived": len(middle),
+                "protected_head": len(protected_head),
+                "protected_tail": len(protected_tail),
+                "checkpoint": result[-1] if result else None,
+            })
+        
+        return json.dumps({"skipped": True, "reason": "No middle messages to archive"})
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not self._db or self._agent_context != "primary":
             return
 
-        if target == "user" and action == "add":
+        if target == "user":
+            subject_type = "user"
+        elif target == "agent":
+            subject_type = "agent"
+        elif target == "project":
+            subject_type = "project"
+        else:
+            subject_type = target
+
+        predicate = metadata.get("predicate", "hermes_memory") if metadata else "hermes_memory"
+        fact_id = metadata.get("fact_id") if metadata else None
+
+        if action == "add":
             fact = Fact(
                 user_id=self._user_id,
-                subject_type="user",
-                predicate="hermes_memory",
+                subject_type=subject_type,
+                predicate=predicate,
                 object_text=content[:500],
-                confidence=0.7,
+                confidence=metadata.get("confidence", 0.7) if metadata else 0.7,
             )
             self._db.insert_fact(fact)
-            logger.debug("KORTEX mirrored memory write: %s %s", action, target)
+
+        elif action == "replace":
+            if fact_id:
+                existing = self._db.get_fact(fact_id)
+            else:
+                existing = self._db.get_most_recent_fact(
+                    subject_type=subject_type,
+                    predicate=predicate,
+                    user_id=self._user_id,
+                )
+            if existing:
+                new_fact = Fact(
+                    user_id=self._user_id,
+                    subject_type=subject_type,
+                    predicate=predicate,
+                    object_text=content[:500],
+                    confidence=metadata.get("confidence", existing.confidence) if metadata else existing.confidence,
+                    source_episode_id=existing.source_episode_id,
+                )
+                self._db.insert_fact(new_fact)
+                self._db.supersede_fact(existing.id, new_fact.id)
+            else:
+                new_fact = Fact(
+                    user_id=self._user_id,
+                    subject_type=subject_type,
+                    predicate=predicate,
+                    object_text=content[:500],
+                    confidence=metadata.get("confidence", 0.7) if metadata else 0.7,
+                )
+                self._db.insert_fact(new_fact)
+
+        elif action == "remove":
+            if fact_id:
+                with self._db._tx() as conn:
+                    conn.execute(
+                        "UPDATE facts SET status='retracted' WHERE id=?",
+                        (fact_id,),
+                    )
+            else:
+                existing = self._db.get_most_recent_fact(
+                    subject_type=subject_type,
+                    predicate=predicate,
+                    user_id=self._user_id,
+                )
+                if existing:
+                    with self._db._tx() as conn:
+                        conn.execute(
+                            "UPDATE facts SET status='retracted' WHERE id=?",
+                            (existing.id,),
+                        )
+
+        logger.debug(
+            "KORTEX mirrored memory write: %s %s %s metadata=%s",
+            action,
+            target,
+            subject_type,
+            metadata,
+        )
+
+    def on_delegation(
+        self,
+        task: str,
+        result: str,
+        *,
+        child_session_id: str = "",
+        **kwargs,
+    ) -> None:
+        if not self._db or self._agent_context != "primary":
+            return
+        try:
+            ep = self._ingestor.ingest_turn(
+                f"[delegated task] {task}",
+                f"[delegated result] {result}",
+                session_id=self._session_id,
+                user_id=self._user_id,
+            )
+            if ep and self._linker:
+                self._linker.link_episode_to_loops(
+                    ep.id, [], user_id=self._user_id
+                )
+            logger.debug(
+                "KORTEX recorded delegation (session=%s, child=%s)",
+                self._session_id,
+                child_session_id,
+            )
+        except Exception:
+            logger.exception("KORTEX on_delegation failed")
 
     def shutdown(self) -> None:
         if self._db:
@@ -478,6 +611,25 @@ class KortexProvider(MemoryProvider):
                 "choices": ["narrative", "json"],
             },
         ]
+
+    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        import yaml
+        config_path = Path(hermes_home) / "config.yaml"
+        try:
+            with open(config_path) as f:
+                full_config = yaml.safe_load(f) or {}
+        except Exception:
+            full_config = {}
+        if "plugins" not in full_config:
+            full_config["plugins"] = {}
+        if "kortex" not in full_config["plugins"]:
+            full_config["plugins"]["kortex"] = {}
+        for key in ("db_path", "auto_extract", "search_format"):
+            if key in values and values[key] is not None:
+                full_config["plugins"]["kortex"][key] = values[key]
+        with open(config_path, "w") as f:
+            yaml.dump(full_config, f)
+        logger.info("KORTEX config saved to %s", config_path)
 
     # -- Tool handlers -------------------------------------------------------
 

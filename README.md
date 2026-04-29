@@ -129,16 +129,15 @@ Important files:
 
 ### Hermes requirements
 
-You need a Hermes Agent build that supports **both**:
+KORTEX v0.2.0 requires **Hermes 4.0+** with the new plugin surface.
 
-- external **memory providers**
-- external **context engines**
+Required interfaces:
 
-This stack assumes a Hermes checkout that has:
-
-- `plugins/memory/<name>/`
-- `plugins/context_engine/<name>/`
-- `context.engine` config support
+- `agent.memory_provider.MemoryProvider` ABC
+- `agent.context_engine.ContextEngine` ABC
+- `ctx.register_memory_provider()` / `ctx.register_context_engine()`
+- `ctx.register_command()` for slash commands
+- `context.engine` and `memory.provider` config keys
 
 ### Python requirements
 
@@ -148,59 +147,31 @@ This stack assumes a Hermes checkout that has:
 
 ---
 
-## Installation modes
+## Installation
 
-There are two realistic ways to use KORTEX.
+### Option 1 — pip install (recommended)
 
-## Mode A — source repo + manual live deployment (matches this stack)
+```bash
+pip install hermes-kortex
+```
 
-This is the most accurate reproduction of the working setup.
+KORTEX uses Hermes 4.0+ entry-points. The plugin auto-discovers via:
 
-### 1. Clone the repo
+- `hermes_agent.plugins` entry point (general plugin)
+- `hermes_agent.memory` entry point (memory provider)
+- `hermes_agent.context_engine` entry point (context engine)
+
+### Option 2 — manual plugin drop
 
 ```bash
 git clone https://github.com/VeelaCleave/hermes-kortex.git
 cd hermes-kortex
+pip install -e .
 ```
 
-### 2. Verify tests
+Or copy `kortex/` into `~/.hermes/plugins/kortex/`.
 
-```bash
-python3 -m pytest -q
-```
-
-### 3. Install into live Hermes
-
-You need to sync KORTEX into **three** places:
-
-#### A. User plugin copy
-
-```text
-~/.hermes/plugins/kortex/
-```
-
-#### B. Live Hermes memory provider path
-
-```text
-~/.hermes/hermes-agent/plugins/memory/kortex/
-```
-
-#### C. Live Hermes context engine path
-
-```text
-~/.hermes/hermes-agent/plugins/context_engine/kortex/
-```
-
-The memory-provider and user-plugin directories should contain the KORTEX Python package files.
-
-The context-engine directory needs:
-
-- `__init__.py`
-- `plugin.yaml`
-
-The context-engine entrypoint should load/register `KortexContextEngine`.
-
-### 4. Configure Hermes
+### Configure Hermes
 
 In `~/.hermes/config.yaml`:
 
@@ -236,47 +207,18 @@ plugins:
     affect_calibration_min_samples: 20
 ```
 
-### 5. Verify Hermes can load both integrations
-
-From the live Hermes checkout:
+### Verify
 
 ```bash
 python3 - <<'PY'
-import sys
-sys.path.insert(0, '/path/to/live/hermes-agent')
+from kortex import register
+from kortex.provider import KortexProvider
+from kortex.context_engine import KortexContextEngine
 
-from plugins.memory import discover_memory_providers, load_memory_provider
-from plugins.context_engine import discover_context_engines, load_context_engine
-
-print('memory_providers=', [name for name, _, _ in discover_memory_providers()])
-print('context_engines=', [name for name, _, _ in discover_context_engines()])
-
-mp = load_memory_provider('kortex')
-ce = load_context_engine('kortex')
-
-print('memory_load=', type(mp).__name__ if mp else None)
-print('context_load=', type(ce).__name__ if ce else None)
-print('context_tools=', [schema['name'] for schema in ce.get_tool_schemas()] if ce else None)
+print('KortexProvider:', KortexProvider)
+print('KortexContextEngine:', KortexContextEngine)
 PY
 ```
-
-Expected shape:
-
-```text
-memory_load= KortexProvider
-context_load= KortexContextEngine
-context_tools= ['kortex_recall', 'kortex_expand']
-```
-
----
-
-## Mode B — pip install / package usage
-
-```bash
-pip install git+https://github.com/VeelaCleave/hermes-kortex.git
-```
-
-This is useful for development or packaging, but many Hermes users will still want the explicit live plugin path installation shown above.
 
 ---
 
@@ -407,6 +349,18 @@ Important keys:
 
 ---
 
+## Slash commands
+
+KORTEX registers `/memory` for direct user access:
+
+```
+/memory status       — show memory statistics
+/memory facts        — list known durable facts
+/memory loops        — list open commitments/threads
+/memory search <query> — search experiential memory
+/memory consolidate  — merge old episodes into summaries
+```
+
 ## Agent-facing tools
 
 ### Memory provider tools
@@ -520,15 +474,13 @@ Targeted lossless-engine validation also passes.
 
 ## Reproducing the exact live stack
 
-If you want another person to reproduce the same stack you have now, send them:
+To reproduce on another machine:
 
-1. this repo
-2. a Hermes build with memory-provider + context-engine support
-3. your intended `config.yaml` template
-4. a starter `SOUL.md`
-5. the install instructions from **Mode A** above
+1. `pip install hermes-kortex`
+2. Configure `~/.hermes/config.yaml` with the settings from **Configure Hermes** above
+3. Create `~/.hermes/SOUL.md` (starter template below)
 
-Minimum required live settings:
+Minimum config:
 
 ```yaml
 context:
@@ -548,7 +500,7 @@ plugins:
     passive_context_hint: true
 ```
 
-And if using Qwen-like models:
+If using Qwen-like models:
 
 ```yaml
 agent:
@@ -561,8 +513,9 @@ agent:
 
 - Hermes core changes are intentionally avoided.
 - KORTEX is designed as a plugin-side system.
-- Live deployment currently uses explicit plugin sync into Hermes plugin directories.
-- If Hermes changes its plugin loading layout in future updates, deployment paths may need adjustment, but KORTEX’s source architecture should remain valid.
+- Uses Hermes 4.0+ pip entry-points for auto-discovery.
+- Falls back gracefully to manual `register_tool` + `register_hook` for older Hermes versions.
+- The `kind: exclusive` in plugin.yaml ensures only one external memory provider runs at a time.
 
 ---
 

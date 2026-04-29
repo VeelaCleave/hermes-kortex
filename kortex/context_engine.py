@@ -14,10 +14,9 @@ from typing import Any, Dict, List, Optional
 
 from .db import DEFAULT_USER_ID, KortexDB
 
-
-try:  # pragma: no cover - exercised in Hermes runtime
+try:
     from agent.context_engine import ContextEngine as HermesContextEngine
-except ImportError:  # pragma: no cover - local tests
+except ImportError:
 
     class HermesContextEngine:
         last_prompt_tokens: int = 0
@@ -36,13 +35,14 @@ except ImportError:  # pragma: no cover - local tests
             self.last_total_tokens = 0
             self.compression_count = 0
 
-        def get_tool_schemas(self) -> List[Dict[str, Any]]:
+        def get_tool_schemas(self):
             return []
 
-        def handle_tool_call(self, name: str, args: Dict[str, Any], **kwargs) -> str:
+        def handle_tool_call(self, name, args, **kwargs):
+            import json
             return json.dumps({"error": f"Unknown context engine tool: {name}"})
 
-        def get_status(self) -> Dict[str, Any]:
+        def get_status(self):
             usage_percent = (
                 min(100, self.last_prompt_tokens / self.context_length * 100)
                 if self.context_length
@@ -56,14 +56,7 @@ except ImportError:  # pragma: no cover - local tests
                 "compression_count": self.compression_count,
             }
 
-        def update_model(
-            self,
-            model: str,
-            context_length: int,
-            base_url: str = "",
-            api_key: str = "",
-            provider: str = "",
-        ) -> None:
+        def update_model(self, model, context_length, base_url="", api_key="", provider=""):
             self.context_length = context_length
             self.threshold_tokens = int(context_length * self.threshold_percent)
 
