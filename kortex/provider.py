@@ -464,6 +464,34 @@ class KortexProvider(MemoryProvider):
             })
         
         return json.dumps({"skipped": True, "reason": "No middle messages to archive"})
+        # Wire up lossless archival from KortexContextEngine
+        from .context_engine import KortexContextEngine
+        
+        engine = KortexContextEngine(
+            db_path=self._config.db_path,
+            user_id=self._user_id
+        )
+        
+        # Archive the middle messages (protect first/last)
+        protected_head = messages[:engine.protect_first_n]
+        protected_tail = messages[-engine.protect_last_n:]
+        middle = messages[engine.protect_first_n:len(messages)-engine.protect_last_n]
+        
+        if middle:
+            result = engine.compress(
+                messages=messages,
+                focus_topic=self._config.focus_topic or "",
+            )
+            
+            # Return the reconstructed list with checkpoint
+            return json.dumps({
+                "archived": len(middle),
+                "protected_head": len(protected_head),
+                "protected_tail": len(protected_tail),
+                "checkpoint": result[-1] if result else None,
+            })
+        
+        return json.dumps({"skipped": True, "reason": "No middle messages to archive"})
 
     def on_memory_write(
         self,
