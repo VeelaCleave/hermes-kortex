@@ -1520,6 +1520,57 @@ class KortexDB:
         )
         return [self._row_to_open_loop(r) for r in rows]
 
+    def get_recently_resolved_loops(
+        self, days_window: float = 7.0, limit: int = 5, user_id: str = DEFAULT_USER_ID
+    ) -> List[OpenLoop]:
+        """Get loops that were resolved within the given time window."""
+        cutoff = now_epoch() - (days_window * 86400)
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM open_loops 
+                   WHERE status='resolved' AND resolved_at >= ? AND user_id=?
+                   ORDER BY resolved_at DESC LIMIT ?""",
+                (cutoff, user_id, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_open_loop(r) for r in rows]
+
+    def get_stale_open_loops(
+        self, days_threshold: float = 14.0, limit: int = 10, user_id: str = DEFAULT_USER_ID
+    ) -> List[OpenLoop]:
+        """Get open loops that haven't been updated in N days (stale)."""
+        cutoff = now_epoch() - (days_threshold * 86400)
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM open_loops 
+                   WHERE status='open' AND created_at < ? AND user_id=?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (cutoff, user_id, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_open_loop(r) for r in rows]
+
+    def get_active_open_loops(
+        self, days_threshold: float = 14.0, limit: int = 10, user_id: str = DEFAULT_USER_ID
+    ) -> List[OpenLoop]:
+        """Get open loops that are still fresh (not stale)."""
+        cutoff = now_epoch() - (days_threshold * 86400)
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM open_loops 
+                   WHERE status='open' AND created_at >= ? AND user_id=?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (cutoff, user_id, limit),
+            )
+            .fetchall()
+        )
+        return [self._row_to_open_loop(r) for r in rows]
+
     # -- Reflections ---------------------------------------------------------
 
     def insert_reflection(self, ref: Reflection) -> int:

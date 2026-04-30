@@ -77,6 +77,16 @@ class KortexConfig:
     extraction_mode: str = "heuristic"
     search_format: str = "narrative"
 
+    # Stale detection for context status system
+    stale_detection_enabled: bool = True
+    stale_loop_days: float = 14.0  # Days before an open loop is considered "stale"
+    stale_fact_days: float = 30.0  # Days before a fact is considered "stale"
+    
+    # Context status display
+    show_context_status: bool = True
+    show_completion_markers: bool = True
+    recent_resolution_window_days: float = 7.0  # How long to show resolved loops in context
+    
     # Identity
     soul_path: Optional[str] = None  # custom SOUL.md path (None = hermes default)
 
@@ -128,6 +138,12 @@ class KortexConfig:
             extraction_mode=data.get("extraction_mode", "heuristic"),
             search_format=data.get("search_format", "narrative"),
             soul_path=data.get("soul_path"),
+            stale_detection_enabled=data.get("stale_detection_enabled", True),
+            stale_loop_days=data.get("stale_loop_days", 14.0),
+            stale_fact_days=data.get("stale_fact_days", 30.0),
+            show_context_status=data.get("show_context_status", True),
+            show_completion_markers=data.get("show_completion_markers", True),
+            recent_resolution_window_days=data.get("recent_resolution_window_days", 7.0),
         )
 
 

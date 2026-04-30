@@ -172,10 +172,20 @@ class Recall:
             return ""
 
         lines = ["Known facts:"]
+        now = now_epoch()
         for f in facts[: self._config.max_facts_per_recall]:
             line = f"- {f.object_text}"
             if f.predicate:
                 line = f"- [{f.predicate}] {f.object_text}"
+            
+            # Add status label based on staleness
+            if self._config.show_context_status:
+                days_since = (now - f.last_seen) / 86400
+                if days_since > self._config.stale_fact_days:
+                    line = f"- [STALE] {line} ({int(days_since)}d)"
+                elif days_since < 1:
+                    line = f"- [FRESH] {line}"
+            
             lines.append(line)
 
         text = "\n".join(lines)
@@ -416,17 +426,48 @@ class Recall:
         return min(self._config.graph_expansion_limit, max(1, graph_budget // 75))
 
     def _build_loops_section(self, budget: int, user_id: str = DEFAULT_USER_ID) -> str:
-        loops = self._db.get_open_loops(
-            limit=self._config.max_loops_per_recall, user_id=user_id
+        lines = []
+        
+        # ── Active open loops (with status labels) ──────────────────────
+        active_loops = self._db.get_active_open_loops(
+            days_threshold=self._config.stale_loop_days,
+            limit=self._config.max_loops_per_recall,
+            user_id=user_id
         )
-        if not loops:
+        stale_loops = self._db.get_stale_open_loops(
+            days_threshold=self._config.stale_loop_days,
+            limit=max(1, self._config.max_loops_per_recall // 2),
+            user_id=user_id
+        )
+        
+        if active_loops or stale_loops:
+            lines.append("Open threads:")
+            for loop in active_loops:
+                kind_label = loop.kind.replace("_", " ")
+                lines.append(f"  - [ACTIVE] [{kind_label}] {loop.text}")
+            for loop in stale_loops:
+                kind_label = loop.kind.replace("_", " ")
+                days_old = int((now_epoch() - loop.created_at) / 86400)
+                lines.append(f"  - [STALE] [{kind_label}] {loop.text} ({days_old}d)")
+        
+        # ── Recently resolved loops (completion markers) ────────────────
+        if self._config.show_completion_markers:
+            resolved = self._db.get_recently_resolved_loops(
+                days_window=self._config.recent_resolution_window_days,
+                limit=min(3, self._config.max_loops_per_recall),
+                user_id=user_id
+            )
+            if resolved:
+                lines.append("Recently completed:")
+                for loop in resolved:
+                    kind_label = loop.kind.replace("_", " ")
+                    days_ago = int((now_epoch() - (loop.resolved_at or loop.created_at)) / 86400)
+                    resolution = loop.resolution or "resolved"
+                    lines.append(f"  - [COMPLETED] [{kind_label}] {loop.text} → {resolution} ({days_ago}d)")
+        
+        if not lines:
             return ""
-
-        lines = ["Open threads:"]
-        for loop in loops:
-            kind_label = loop.kind.replace("_", " ")
-            lines.append(f"- [{kind_label}] {loop.text}")
-
+        
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
@@ -547,9 +588,19 @@ class Recall:
         session_id: str = "",
         temporal_window_days: Optional[float] = None,
     ) -> float:
-        # Recency: exponential decay with configurable half-life
+        # Dynamic recency: exponential decay with configurable half-life
         age_days = max((now - ep.timestamp) / 86400, 0.01)
-        half_life = self._config.recency_decay_days
+        
+        # Dynamic half-life: shorter when there's a specific query (more focused),
+        # longer when browsing (broader recall)
+        base_half_life = self._config.recency_decay_days
+        if query:
+            # Tighter decay for query-driven recall (prioritize closer matches)
+            half_life = base_half_life * 0.7
+        else:
+            # Broader decay for passive recall (wider net)
+            half_life = base_half_life * 1.3
+        
         recency = math.exp(-0.693 * age_days / half_life)  # ln(2) ≈ 0.693
 
         if session_id and ep.session_id == session_id:
@@ -560,6 +611,14 @@ class Recall:
             window_scale = max(temporal_window_days, 1.0)
             temporal_alignment = math.exp(-distance / window_scale)
             recency *= max(1.0, temporal_alignment * self._config.temporal_query_boost)
+
+        # ── Recency tier bonus ──────────────────────────────────────────
+        # Give a small boost to memories in the "sweet spot" (not too fresh,
+        # not too old) — the Goldilocks zone for contextual relevance
+        if 3 <= age_days <= 14:
+            recency *= 1.15  # "Warm" memories get a boost
+        elif age_days < 1:
+            recency *= 1.10  # Very fresh memories
 
         salience = ep.salience
         emotional = ep.emotional_weight
