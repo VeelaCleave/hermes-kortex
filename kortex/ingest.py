@@ -532,17 +532,23 @@ class Ingestor:
     def _find_matching_fact(
         self, predicate: str, object_text: str, user_id: str = "__default__"
     ) -> Optional[Fact]:
+        # Check by predicate with improved matching
         existing = self._db.get_facts_by_predicate(predicate, limit=10, user_id=user_id)
         for fact in existing:
+            if self._facts_are_equivalent(fact.object_text, object_text):
+                return fact
             if self._facts_are_related(fact.object_text, object_text):
                 return fact
 
+        # FTS search for similar content across all predicates
         try:
             similar = self._db.find_similar_facts(
                 object_text, predicate=predicate, limit=3, user_id=user_id
             )
             if similar:
-                return similar[0]
+                for fact in similar:
+                    if self._facts_are_equivalent(fact.object_text, object_text):
+                        return fact
         except Exception:
             pass
 
@@ -611,15 +617,53 @@ class Ingestor:
 
     @staticmethod
     def _facts_are_equivalent(existing: str, new: str) -> bool:
-        """Two facts are equivalent if they say essentially the same thing."""
-        existing_words = set(existing.lower().split())
-        new_words = set(new.lower().split())
+        """Two facts are equivalent if they say essentially the same thing.
+        
+        Uses a two-pass approach:
+        1. Length-normalized Jaccard on words (catches near-identical facts)
+        2. Length-normalized Jaccard on bigrams (catches reworded facts)
+        """
+        existing_clean = existing.lower().strip()
+        new_clean = new.lower().strip()
+        
+        # Quick check: if lengths differ by more than 30%, they're probably different
+        if len(existing_clean) > 0 and len(new_clean) > 0:
+            length_ratio = min(len(existing_clean), len(new_clean)) / max(len(existing_clean), len(new_clean))
+            if length_ratio < 0.5:
+                return False
+        
+        # Word-level Jaccard
+        existing_words = set(existing_clean.split())
+        new_words = set(new_clean.split())
         if not existing_words or not new_words:
             return False
         intersection = existing_words & new_words
         union = existing_words | new_words
-        jaccard = len(intersection) / len(union)
-        return jaccard >= 0.7
+        word_jaccard = len(intersection) / len(union)
+        
+        # If word-level is strong enough, call it a match
+        if word_jaccard >= 0.7:
+            return True
+        
+        # Bigram-level Jaccard (catches reworded facts)
+        existing_bigrams = set()
+        new_bigrams = set()
+        words_e = existing_clean.split()
+        words_n = new_clean.split()
+        for i in range(len(words_e) - 1):
+            existing_bigrams.add((words_e[i], words_e[i+1]))
+        for i in range(len(words_n) - 1):
+            new_bigrams.add((words_n[i], words_n[i+1]))
+        
+        if existing_bigrams and new_bigrams:
+            bigram_intersection = existing_bigrams & new_bigrams
+            bigram_union = existing_bigrams | new_bigrams
+            bigram_jaccard = len(bigram_intersection) / len(bigram_union)
+            # Lower threshold for bigrams since they're more sensitive to small changes
+            if bigram_jaccard >= 0.5:
+                return True
+        
+        return False
 
     @staticmethod
     def _facts_are_related(existing: str, new: str) -> bool:

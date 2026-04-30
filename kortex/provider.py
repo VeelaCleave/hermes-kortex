@@ -261,6 +261,79 @@ class KortexProvider(MemoryProvider):
 
         threading.Thread(target=_bg, daemon=True).start()
 
+    def _filter_user_content(self, content: str) -> tuple[str, bool]:
+        """Filter out system prompts, tool outputs, and other non-conversation content from user messages.
+        
+        Returns (cleaned_content, skip_entire_turn).
+        skip_entire_turn is True if the user content is purely system noise.
+        """
+        if not content:
+            return ("", True)
+        
+        # Patterns that indicate system-generated content (not real user input)
+        system_patterns = [
+            "[System note:",
+            "[memory-context]",
+            "Recalled memories:",
+            "Open threads:",
+            "Learned behaviors:",
+            "Known facts:",
+            "What general pattern of task did the user just complete",
+            "Review the conversation above",
+            "Consider whether a skill should be saved",
+            "check my work over at",
+            "make sure it's working as intended",
+            "maybe you could try out",
+            "you can then deep dive",
+            "figure out what's not working",
+            "what's over-engineered",
+            "what's missing",
+        ]
+        
+        for pattern in system_patterns:
+            if pattern.lower() in content.lower():
+                # Strip the system noise but keep any real user text
+                lines = content.split("\n")
+                real_lines = []
+                for line in lines:
+                    skip = False
+                    for p in system_patterns:
+                        if p.lower() in line.lower():
+                            skip = True
+                            break
+                    if not skip:
+                        real_lines.append(line)
+                
+                cleaned = "\n".join(real_lines).strip()
+                if cleaned:
+                    return (cleaned, False)
+                return ("", True)
+        
+        return (content, False)
+    
+    def _filter_assistant_content(self, content: str) -> str:
+        """Filter out tool outputs and system noise from assistant responses."""
+        if not content:
+            return content
+        
+        # Remove tool result blocks
+        lines = content.split("\n")
+        clean_lines = []
+        in_tool_block = False
+        
+        for line in lines:
+            # Skip lines that are clearly tool/system output
+            if any(pattern in line for pattern in [
+                "EXIT_CODE", "EXIT: 124", "EXIT: 0",
+                "passed in", "failed in",
+                "KORTEX Memory", "KORTEX initialized",
+                "PRAGMA", "sqlite3",
+            ]):
+                continue
+            clean_lines.append(line)
+        
+        return "\n".join(clean_lines)
+    
     def sync_turn(
         self, user_content: str, assistant_content: str, *, session_id: str = ""
     ) -> None:
@@ -269,13 +342,21 @@ class KortexProvider(MemoryProvider):
         if not self._ingestor or not self._db:
             return
 
+        # ── Filter out garbage before ingesting ──────────────────────────
+        user_clean, skip_user = self._filter_user_content(user_content)
+        assistant_clean = self._filter_assistant_content(assistant_content)
+
+        # If both sides are empty after filtering, skip the turn entirely
+        if not user_clean.strip() and not assistant_clean.strip():
+            return
+
         sid = session_id or self._session_id
 
         def _bg():
             try:
                 ep = self._ingestor.ingest_turn(
-                    user_content,
-                    assistant_content,
+                    user_clean,
+                    assistant_clean,
                     session_id=sid,
                     user_id=self._user_id,
                 )
@@ -285,19 +366,19 @@ class KortexProvider(MemoryProvider):
 
                 if self._config.auto_extract:
                     self._ingestor.extract_open_loops(
-                        user_content, ep.id, user_id=self._user_id
+                        user_clean, ep.id, user_id=self._user_id
                     )
                     facts = self._ingestor.extract_facts(
-                        user_content, ep.id, user_id=self._user_id
+                        user_clean, ep.id, user_id=self._user_id
                     )
                     resolved_loops = self._ingestor.resolve_answered_loops(
-                        assistant_content,
+                        assistant_clean,
                         resolving_episode_id=ep.id,
                         user_id=self._user_id,
                     )
                     resolved_loops.extend(
                         self._ingestor.resolve_completed_commitments(
-                            assistant_content,
+                            assistant_clean,
                             resolving_episode_id=ep.id,
                             user_id=self._user_id,
                         )
@@ -305,7 +386,7 @@ class KortexProvider(MemoryProvider):
                 else:
                     resolved_loops = []
 
-                affect = score_affect(user_content, assistant_content)
+                affect = score_affect(user_clean, assistant_clean)
                 baseline = self._db.get_affect_baseline(user_id=self._user_id)
                 if affect.is_significant:
                     self._db.insert_emotion_log(
@@ -331,8 +412,8 @@ class KortexProvider(MemoryProvider):
                 if self._config.auto_extract:
                     reflections = process_reflections(
                         self._db,
-                        user_content,
-                        assistant_content,
+                        user_clean,
+                        assistant_clean,
                         calibrated_affect,
                         ep.id,
                         user_id=self._user_id,
@@ -360,7 +441,7 @@ class KortexProvider(MemoryProvider):
                     self._consolidator.maybe_consolidate(user_id=self._user_id)
 
                 # ── OCEAN personality scoring ────────────────────────────
-                self._update_ocean(user_content, assistant_content)
+                self._update_ocean(user_clean, assistant_clean)
 
                 logger.debug(
                     "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
