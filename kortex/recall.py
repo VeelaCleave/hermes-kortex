@@ -41,6 +41,13 @@ class Recall:
         sections = []
         budget_used = 0
         selected_facts = self._select_facts(query, user_id=user_id)
+        
+        # ── Deduplicate facts to prevent redundant parsing ─────────────
+        # MOE models waste expert-routing on identical/duplicate facts.
+        # Dedup by object_text (case-insensitive), keeping highest confidence.
+        deduped_facts = self._deduplicate_facts(selected_facts)
+        if deduped_facts is not selected_facts:
+            selected_facts = deduped_facts
 
         summaries_budget = self._config.budget.get("conversation_summaries", 250)
         summaries_text = self._build_conversation_summaries_section(
@@ -107,9 +114,33 @@ class Recall:
         if not sections:
             return ""
 
-        header = "[KORTEX Memory]"
-        body = "\n".join(sections)
-        full = f"{header}\n{body}"
+        # ── Section headers for MOE routing ─────────────────────────────
+        # Each section gets a clear header so MOE models route to the
+        # correct expert without cross-activating unrelated ones.
+        # This prevents the "all experts fire at once" problem that
+        # makes MOE models slower than dense models.
+        routed_sections = []
+        for section_text in sections:
+            if not section_text:
+                continue
+            # Determine which section this belongs to based on content
+            if "Known facts:" in section_text:
+                routed_sections.append("[FACTS] " + section_text)
+            elif "Recalled memories:" in section_text:
+                routed_sections.append("[MEMORY] " + section_text)
+            elif "Open threads:" in section_text or "Recently completed:" in section_text:
+                routed_sections.append("[THREADS] " + section_text)
+            elif "Learned behaviors:" in section_text:
+                routed_sections.append("[BEHAVIOR] " + section_text)
+            elif "Conversation summaries:" in section_text:
+                routed_sections.append("[SUMMARIES] " + section_text)
+            elif "Recent mood:" in section_text:
+                routed_sections.append("[MOOD] " + section_text)
+            else:
+                routed_sections.append(section_text)
+
+        body = "\n".join(routed_sections)
+        full = f"[KORTEX Memory]\n{body}"
 
         if self._estimate_tokens(full) > self._config.total_budget:
             full = self._trim_to_budget(full, self._config.total_budget)
@@ -164,6 +195,30 @@ class Recall:
 
         facts = [fact for fact in facts if fact.contradiction_status != "contradicted"]
         return facts[: self._config.max_facts_per_recall]
+
+    def _deduplicate_facts(self, facts: List[Fact]) -> List[Fact]:
+        """Deduplicate facts by object_text (case-insensitive), keeping highest confidence.
+        
+        MOE models waste expert-routing on duplicate facts. This prevents that.
+        """
+        if not facts:
+            return facts
+        
+        seen: Dict[str, int] = {}  # object_text -> index in result
+        result: List[Fact] = []
+        
+        for fact in facts:
+            key = fact.object_text.lower().strip()
+            if key in seen:
+                # Keep the one with higher confidence
+                existing = result[seen[key]]
+                if fact.confidence > existing.confidence:
+                    result[seen[key]] = fact
+            else:
+                seen[key] = len(result)
+                result.append(fact)
+        
+        return result
 
     def _build_facts_section(self, facts: List[Fact], budget: int) -> str:
         facts = facts[: self._config.max_facts_per_recall]

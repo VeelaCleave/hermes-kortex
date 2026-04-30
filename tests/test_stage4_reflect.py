@@ -761,9 +761,9 @@ class TestRecallReflections:
         ep.id = kortex_db.insert_episode(ep)
 
         for kind, text, conf in [
-            ("mistake", "Agent used wrong port number causing connection failure", 0.7),
-            ("pattern", "Step by step approach worked well for debugging", 0.6),
-            ("preference", "User prefers concise responses without preamble", 0.8),
+            ("mistake", "Agent used wrong port number causing connection failure", 0.9),
+            ("pattern", "Step by step approach worked well for debugging", 0.8),
+            ("preference", "User prefers concise responses without preamble", 0.7),
         ]:
             r = Reflection(
                 kind=kind, text=text, confidence=conf, source_episode_id=ep.id
@@ -776,7 +776,8 @@ class TestRecallReflections:
         assert "Learned behaviors:" in section
         assert "Avoid" in section
         assert "Works well" in section
-        assert "User prefers" in section
+        # max_reflections_per_recall=2, so only top 2 by confidence appear
+        # 0.9 (mistake/Avoid) and 0.8 (pattern/Works well) make the cut
 
     def test_empty_when_no_reflections(self, kortex_db, kortex_config):
         recall = Recall(kortex_db, kortex_config)
@@ -860,10 +861,10 @@ class TestRecallReflections:
 class TestConfigReflectionFields:
     def test_defaults(self):
         config = KortexConfig()
-        assert config.max_reflections_per_recall == 3
+        assert config.max_reflections_per_recall == 2
         assert config.reflection_confidence_threshold == 0.4
         assert "reflections" in config.budget
-        assert config.budget["reflections"] == 200
+        assert config.budget["reflections"] == 150
 
     def test_from_dict(self):
         config = KortexConfig.from_dict(

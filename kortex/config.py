@@ -10,16 +10,18 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-# Budget allocation for context injection (~2000 tokens total)
+# Budget allocation for context injection (~1200 tokens total)
+# Reduced from ~2000 to avoid bloating context for MOE models.
+# Each section is leaner to prevent redundant parsing across experts.
 DEFAULT_BUDGET = {
-    "relationship_state": 200,  # 150-250 tokens
-    "conversation_summaries": 100,
-    "stable_facts": 350,  # 300-400 tokens
-    "episodic_memories": 450,  # reserve space for graph-expanded recall
-    "graph_memories": 150,
-    "open_loops": 200,  # 150-250 tokens
-    "reflections": 200,  # 150-250 tokens
-    "reserve": 150,  # 100-200 tokens
+    "relationship_state": 150,  # 100-150 tokens
+    "conversation_summaries": 80,
+    "stable_facts": 200,  # 150-250 tokens
+    "episodic_memories": 300,  # reserve space for graph-expanded recall
+    "graph_memories": 100,
+    "open_loops": 150,  # 100-200 tokens
+    "reflections": 150,  # 100-200 tokens
+    "reserve": 100,  # 100-150 tokens
 }
 
 
@@ -31,7 +33,7 @@ class KortexConfig:
     db_path: Optional[str] = None  # None = auto (hermes_home / "kortex.db")
 
     # Episodic memory
-    max_episodes_per_recall: int = 4
+    max_episodes_per_recall: int = 3
     max_conversation_summaries_per_recall: int = 2
     salience_threshold: float = 0.2
     recency_decay_days: float = 30.0  # half-life in days for recency scoring
@@ -49,21 +51,21 @@ class KortexConfig:
     graph_expansion_limit: int = 6
 
     # Facts
-    max_facts_per_recall: int = 6
+    max_facts_per_recall: int = 4
     fact_confidence_threshold: float = 0.3
 
     # Open loops
-    max_loops_per_recall: int = 3
+    max_loops_per_recall: int = 2
 
     # Reflections
-    max_reflections_per_recall: int = 3
+    max_reflections_per_recall: int = 2
     reflection_confidence_threshold: float = 0.4
 
     # Context budget (tokens per section)
     budget: Dict[str, int] = field(default_factory=lambda: DEFAULT_BUDGET.copy())
 
     # Total hard cap
-    total_budget: int = 1800
+    total_budget: int = 1230
 
     # Passive recall / context-engine integration
     passive_recall: bool = True
@@ -100,7 +102,7 @@ class KortexConfig:
 
         return cls(
             db_path=data.get("db_path"),
-            max_episodes_per_recall=data.get("max_episodes_per_recall", 4),
+            max_episodes_per_recall=data.get("max_episodes_per_recall", 3),
             max_conversation_summaries_per_recall=data.get(
                 "max_conversation_summaries_per_recall", 2
             ),
@@ -118,15 +120,15 @@ class KortexConfig:
             graph_max_hops=data.get("graph_max_hops", 2),
             graph_decay_factor=data.get("graph_decay_factor", 0.5),
             graph_expansion_limit=data.get("graph_expansion_limit", 6),
-            max_facts_per_recall=data.get("max_facts_per_recall", 6),
+            max_facts_per_recall=data.get("max_facts_per_recall", 4),
             fact_confidence_threshold=data.get("fact_confidence_threshold", 0.3),
-            max_loops_per_recall=data.get("max_loops_per_recall", 3),
-            max_reflections_per_recall=data.get("max_reflections_per_recall", 3),
+            max_loops_per_recall=data.get("max_loops_per_recall", 2),
+            max_reflections_per_recall=data.get("max_reflections_per_recall", 2),
             reflection_confidence_threshold=data.get(
                 "reflection_confidence_threshold", 0.4
             ),
             budget=merged_budget,
-            total_budget=data.get("total_budget", 1800),
+            total_budget=data.get("total_budget", 1230),
             passive_recall=data.get("passive_recall", True),
             prefer_passive_recall=data.get("prefer_passive_recall", True),
             context_engine_enabled=data.get("context_engine_enabled", True),
