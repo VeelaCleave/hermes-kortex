@@ -314,6 +314,18 @@ CREATE TABLE IF NOT EXISTS kortex_schema_version (
     version     INTEGER NOT NULL,
     migrated_at REAL NOT NULL
 );
+
+-- Semantic embeddings table for vector similarity search
+CREATE TABLE IF NOT EXISTS embeddings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id       INTEGER NOT NULL,
+    entity_type     TEXT NOT NULL,
+    embedding_vector BLOB NOT NULL,
+    created_at      REAL NOT NULL,
+    user_id         TEXT NOT NULL DEFAULT '{DEFAULT_USER_ID}'
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_entity ON embeddings(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_user ON embeddings(user_id);
 """
 
 _LOSSLESS_CONTEXT_SCHEMA_SQL = """
@@ -2588,3 +2600,58 @@ class KortexDB:
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None
+
+    # ── Semantic Embeddings ───────────────────────────────────────────────────
+
+    def insert_embedding(
+        self,
+        entity_id: int,
+        entity_type: str,
+        embedding_vector: bytes,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> int:
+        """Store a vector embedding for an entity (episode, fact, etc.)."""
+        now = now_epoch()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """INSERT INTO embeddings
+                   (entity_id, entity_type, embedding_vector, created_at, user_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (entity_id, entity_type, embedding_vector, now, user_id),
+            )
+            return cur.lastrowid
+
+    def get_embedding(
+        self,
+        entity_type: str,
+        entity_id: int,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve the latest embedding for a given entity."""
+        row = (
+            self._get_conn()
+            .execute(
+                """SELECT entity_id, entity_type, embedding_vector, created_at, user_id
+                   FROM embeddings
+                   WHERE entity_type=? AND entity_id=? AND user_id=?
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+                (entity_type, entity_id, user_id),
+            )
+            .fetchone()
+        )
+        return dict(row) if row else None
+
+    def delete_embedding(
+        self,
+        entity_type: str,
+        entity_id: int,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> int:
+        """Delete embeddings for a specific entity."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                """DELETE FROM embeddings WHERE entity_type=? AND entity_id=? AND user_id=?""",
+                (entity_type, entity_id, user_id),
+            )
+            return cur.rowcount
