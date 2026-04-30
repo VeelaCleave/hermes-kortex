@@ -504,35 +504,22 @@ class KortexProvider(MemoryProvider):
                 user_id=self._user_id
             )
 
-            # Timeout guard: if compress() takes >2s, fall through
-            import signal
+            result = engine.compress(
+                messages=messages,
+                focus_topic=self._config.focus_topic or "",
+            )
 
-            def _timeout_handler(signum, frame):
-                raise TimeoutError("KORTEX compress took > 2s")
+            # Safety: if compress() returned the original messages list (no-op),
+            # returning it would cause the LLM compressor to still process all
+            # messages and time out. Skip compression instead.
+            if result is messages or (isinstance(result, list) and len(result) == len(messages)):
+                return ""
 
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(2)
-            try:
-                result = engine.compress(
-                    messages=messages,
-                    focus_topic=self._config.focus_topic or "",
-                )
-            except TimeoutError:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
-                logger.warning("KORTEX compress timed out (>2s), injecting marker only")
-                return "⚠ Compression summary failed: Request timed out. Inserted a fallback context marker."
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
-
-            # engine.compress() returns [head + checkpoint + tail]
-            # Return as JSON-serializable list for Hermes to use directly
             return json.dumps(result)
 
         except Exception as e:
             logger.error("KORTEX on_pre_compress failed: %s", e)
-            return "⚠ Compression summary failed: Request timed out. Inserted a fallback context marker."
+            return ""
 
     def on_memory_write(
         self,

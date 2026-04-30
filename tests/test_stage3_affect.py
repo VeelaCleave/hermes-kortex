@@ -373,9 +373,9 @@ class TestDBMigration:
         table_names = {r["name"] for r in tables}
         assert "emotion_log" in table_names
 
-    def test_schema_version_is_3(self, kortex_db):
+    def test_schema_version(self, kortex_db):
         version = kortex_db._get_conn().execute("PRAGMA user_version").fetchone()[0]
-        assert version == 3
+        assert version == 4
 
 
 # ======================================================================== #
