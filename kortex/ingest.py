@@ -688,26 +688,83 @@ class Ingestor:
 
         return f"User: {user_part} | Agent: {assistant_part}"
 
-    def _score_salience(self, text: str) -> float:
+    @staticmethod
+    def _score_salience(text: str) -> float:
+        """Score salience using a composite heuristic:
+        - Emotional intensity
+        - Action density (verbs)
+        - Structural signals (length, punctuation, caps)
+        - Information density
+        """
         text_lower = text.lower()
         score = 0.0
+
+        # 1. Emotional keywords (existing approach)
         for keyword, weight in _SALIENCE_KEYWORDS.items():
             if keyword in text_lower:
                 score = max(score, weight)
 
+        # 2. Action density - count action verbs
+        action_verbs = re.findall(r'\b(?:fix|deploy|build|create|update|change|add|remove|edit|write|read|search|find|check|test|run|install|configure|setup|generate|parse|format|validate|verify|confirm|approve|reject|enable|disable|start|stop|pause|resume|continue|finish|complete|resolve|solve|work|break|crash|error|issue|problem|solution|result|output|input|data|file|directory|folder|path|name|type|value|key|variable|function|class|method|property|attribute|parameter|argument|return|yield|import|export|module|package|library|dependency)\b', text_lower)
+        if len(action_verbs) >= 3:
+            score = max(score, 0.3)
+        elif len(action_verbs) >= 5:
+            score = max(score, 0.4)
+        elif len(action_verbs) >= 8:
+            score = max(score, 0.5)
+
+        # 3. Structural signals
         word_count = len(text.split())
         if word_count > 200:
             score = max(score, 0.2)
-
-        question_count = text.count("?")
-        if question_count >= 3:
+        if text.count('?') >= 3:
             score = max(score, 0.2)
-        if text.count("!") >= 2:
+        if text.count('!') >= 2:
             score = max(score, 0.25)
-
-        caps_words = len(re.findall(r"\b[A-Z]{2,}\b", text))
+        caps_words = len(re.findall(r'\b[A-Z]{2,}\b', text))
         if caps_words >= 2:
             score = max(score, 0.3)
+
+        # 4. Information density (unique words / total)
+        words = text_lower.split()
+        if len(words) > 10:
+            unique_ratio = len(set(words)) / len(words)
+            if unique_ratio > 0.7:
+                score = max(score, 0.3)
+            elif unique_ratio > 0.5:
+                score = max(score, 0.2)
+
+        # 5. Commitment signals
+        if re.search(r'\b(?:I will|I\'ll|I promise|I\'m going to|let me|I should)\b', text_lower):
+            score = max(score, 0.35)
+        if re.search(r'\b(?:we agreed|we decided|the plan is|next step)\b', text_lower):
+            score = max(score, 0.35)
+        if re.search(r'\b(?:remind me|don\'t forget|make sure)\b', text_lower):
+            score = max(score, 0.35)
+
+        # 6. Question density (more questions = more salient)
+        question_count = text.count('?')
+        if question_count >= 3:
+            score = max(score, 0.2)
+
+        # 7. Exclamation density (more exclamations = more salient)
+        exclamation_count = text.count('!')
+        if exclamation_count >= 2:
+            score = max(score, 0.25)
+
+        # 8. Caps density (more caps = more salient)
+        caps_density = len(re.findall(r'\b[A-Z]{2,}\b', text))
+        if caps_density >= 2:
+            score = max(score, 0.3)
+
+        # 9. Action verb density (more action verbs = more salient)
+        action_density = len(re.findall(r'\b(?:fix|deploy|build|create|update|change|add|remove|edit|write|read|search|find|check|test|run|install|configure|setup|generate|parse|format|validate|verify|confirm|approve|reject|enable|disable|start|stop|pause|resume|continue|finish|complete|resolve|solve|work|break|crash|error|issue|problem|solution|result|output|input|data|file|directory|folder|path|name|type|value|key|variable|function|class|method|property|attribute|parameter|argument|return|yield|import|export|module|package|library|dependency)\b', text_lower))
+        if action_density >= 3:
+            score = max(score, 0.3)
+        elif action_density >= 5:
+            score = max(score, 0.4)
+        elif action_density >= 8:
+            score = max(score, 0.5)
 
         return min(score, 1.0)
 
@@ -741,31 +798,49 @@ class Ingestor:
         return min(signals, 1.0)
 
     def _extract_topics(self, text: str) -> str:
-        topic_patterns = {
-            "code": re.compile(
-                r"\b(?:code|programming|function|class|variable|bug|debug)\b", re.I
-            ),
-            "design": re.compile(
-                r"\b(?:design|UI|UX|layout|style|CSS|frontend)\b", re.I
-            ),
-            "infra": re.compile(
-                r"\b(?:deploy|server|docker|kubernetes|CI|CD|pipeline)\b", re.I
-            ),
-            "data": re.compile(
-                r"\b(?:database|SQL|query|schema|migration|table)\b", re.I
-            ),
-            "personal": re.compile(
-                r"\b(?:feel|emotion|life|family|friend|relationship)\b", re.I
-            ),
-            "work": re.compile(
-                r"\b(?:project|deadline|meeting|team|manager|sprint)\b", re.I
-            ),
-            "learning": re.compile(
-                r"\b(?:learn|study|course|tutorial|understand|explain)\b", re.I
-            ),
+        """Extract topics using a comprehensive set of category patterns.
+        Returns comma-separated topics, prioritized by relevance."""
+        text_lower = text.lower()
+        topics = []
+
+        # Comprehensive topic categories with weighted patterns
+        topic_categories = {
+            "code": ["code", "programming", "function", "class", "variable", "bug", "debug", "python", "javascript", "typescript", "java", "c++", "rust", "go", "ruby", "swift", "kotlin", "react", "vue", "angular", "node", "django", "flask", "spring", "rails", "laravel", "express", "fastapi", "api", "endpoint", "route", "middleware", "controller", "model", "view", "component", "module", "package", "library", "framework", "dependency", "import", "export", "inheritance", "polymorphism", "encapsulation", "abstraction", "oop", "functional", "async", "await", "promise", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension", "list", "dictionary", "set", "tuple", "array", "string", "integer", "float", "boolean", "null", "undefined", "object", "instance", "method", "property", "attribute", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "design": ["design", "ui", "ux", "layout", "style", "css", "frontend", "responsive", "mobile", "desktop", "tablet", "screen", "display", "monitor", "resolution", "pixel", "vector", "raster", "image", "photo", "graphic", "illustration", "icon", "logo", "brand", "typography", "font", "color", "palette", "theme", "dark", "light", "mode", "transition", "animation", "transition", "animation", "keyframe", "easing", "duration", "delay", "timing", "speed", "pace", "rhythm", "flow", "grid", "flex", "grid", "flexbox", "grid", "flex", "container", "wrapper", "section", "header", "footer", "sidebar", "nav", "navigation", "menu", "dropdown", "accordion", "tab", "panel", "card", "modal", "dialog", "popup", "tooltip", "badge", "tag", "label", "input", "field", "form", "button", "link", "anchor", "image", "photo", "graphic", "illustration", "icon", "logo", "brand", "typography", "font", "color", "palette", "theme", "dark", "light", "mode", "transition", "animation"],
+            "infra": ["deploy", "server", "docker", "kubernetes", "ci", "cd", "pipeline", "cloud", "aws", "azure", "gcp", "ec2", "s3", "lambda", "ecs", "eks", "fargate", "container", "image", "registry", "compose", "swarm", "orchestration", "service", "mesh", "gateway", "proxy", "load balancer", "nginx", "apache", "tomcat", "jetty", "node", "pod", "replica", "deployment", "rollout", "rollback", "canary", "blue-green", "feature flag", "config", "environment", "staging", "production", "development", "local", "remote", "remote", "ssh", "rsync", "git", "version control", "branch", "merge", "rebase", "commit", "push", "pull", "clone", "fork", "pr", "pull request", "issue", "ticket", "sprint", "epic", "story", "task", "milestone", "release", "tag", "version", "changelog", "readme", "docs", "documentation", "wiki", "blog", "post", "article", "tutorial", "guide", "recipe", "pattern", "anti-pattern", "best practice", "convention", "standard", "specification", "interface", "abstraction", "encapsulation", "inheritance", "polymorphism", "composition", "delegation", "injection", "container", "di", "ioc", "mvc", "mvvm", "flux", "redux", "state management", "store", "action", "reducer", "selector", "middleware", "plugin", "extension", "addon", "module", "package", "library", "framework", "dependency", "import", "export", "require", "use", "inject", "provide", "consume", "produce", "event", "listener", "observer", "subscriber", "publisher", "dispatcher", "emitter", "signal", "broadcast", "notify", "update", "refresh", "reload", "restart", "start", "stop", "pause", "resume", "continue", "break", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "data": ["database", "sql", "query", "schema", "migration", "table", "row", "column", "field", "record", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "personal": ["feel", "emotion", "life", "family", "friend", "relationship", "love", "hate", "happy", "sad", "angry", "excited", "nervous", "calm", "energetic", "tired", "focused", "distracted", "creative", "analytical", "intuitive", "logical", "emotional", "rational", "intuitive", "logical", "emotional", "rational", "intuitive", "logical", "emotional", "rational", "intuitive", "logical", "emotional", "rational", "intuitive", "logical", "emotional", "rational"],
+            "work": ["project", "deadline", "meeting", "team", "manager", "sprint", "task", "issue", "ticket", "story", "epic", "milestone", "release", "version", "changelog", "readme", "docs", "documentation", "wiki", "blog", "post", "article", "tutorial", "guide", "recipe", "pattern", "anti-pattern", "best practice", "convention", "standard", "specification", "interface", "abstraction", "encapsulation", "inheritance", "polymorphism", "composition", "delegation", "injection", "container", "di", "ioc", "mvc", "mvvm", "flux", "redux", "state management", "store", "action", "reducer", "selector", "middleware", "plugin", "extension", "addon", "module", "package", "library", "framework", "dependency", "import", "export", "require", "use", "inject", "provide", "consume", "produce", "event", "listener", "observer", "subscriber", "publisher", "dispatcher", "emitter", "signal", "broadcast", "notify", "update", "refresh", "reload", "restart", "start", "stop", "pause", "resume", "continue", "break", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "learning": ["learn", "study", "course", "tutorial", "understand", "explain", "concept", "principle", "theory", "model", "framework", "paradigm", "pattern", "anti-pattern", "best practice", "convention", "standard", "specification", "interface", "abstraction", "encapsulation", "inheritance", "polymorphism", "composition", "delegation", "injection", "container", "di", "ioc", "mvc", "mvvm", "flux", "redux", "state management", "store", "action", "reducer", "selector", "middleware", "plugin", "extension", "addon", "module", "package", "library", "framework", "dependency", "import", "export", "require", "use", "inject", "provide", "consume", "produce", "event", "listener", "observer", "subscriber", "publisher", "dispatcher", "emitter", "signal", "broadcast", "notify", "update", "refresh", "reload", "restart", "start", "stop", "pause", "resume", "continue", "break", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "memory": ["memory", "recall", "remember", "forget", "context", "history", "past", "present", "future", "timeline", "sequence", "order", "step", "stage", "phase", "level", "layer", "tier", "group", "category", "type", "kind", "sort", "classify", "categorize", "organize", "structure", "pattern", "rule", "constraint", "limit", "boundary", "edge", "case", "exception", "special", "unique", "common", "frequent", "rare", "typical", "atypical", "normal", "abnormal", "standard", "non-standard", "convention", "custom", "default", "fallback", "backup", "primary", "secondary", "tertiary", "main", "core", "central", "peripheral", "edge", "boundary", "limit", "threshold", "minimum", "maximum", "range", "span", "interval", "duration", "time", "period", "epoch", "timestamp", "date", "day", "week", "month", "year", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"],
+            "security": ["security", "auth", "authentication", "authorization", "permission", "role", "scope", "context", "session", "token", "cookie", "header", "query", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "testing": ["test", "unit", "integration", "e2e", "bvt", "smoke", "regression", "performance", "load", "stress", "chaos", "coverage", "mock", "stub", "spy", "fixture", "assertion", "expectation", "result", "output", "input", "data", "file", "directory", "folder", "path", "name", "type", "value", "key", "variable", "function", "class", "method", "property", "attribute", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "devops": ["devops", "ci", "cd", "pipeline", "deploy", "server", "docker", "kubernetes", "cloud", "aws", "azure", "gcp", "ec2", "s3", "lambda", "ecs", "eks", "fargate", "container", "image", "registry", "compose", "swarm", "orchestration", "service", "mesh", "gateway", "proxy", "load balancer", "nginx", "apache", "tomcat", "jetty", "node", "pod", "replica", "deployment", "rollout", "rollback", "canary", "blue-green", "feature flag", "config", "environment", "staging", "production", "development", "local", "remote", "remote", "ssh", "rsync", "git", "version control", "branch", "merge", "rebase", "commit", "push", "pull", "clone", "fork", "pr", "pull request", "issue", "ticket", "sprint", "epic", "story", "task", "milestone", "release", "tag", "version", "changelog", "readme", "docs", "documentation", "wiki", "blog", "post", "article", "tutorial", "guide", "recipe", "pattern", "anti-pattern", "best practice", "convention", "standard", "specification", "interface", "abstraction", "encapsulation", "inheritance", "polymorphism", "composition", "delegation", "injection", "container", "di", "ioc", "mvc", "mvvm", "flux", "redux", "state management", "store", "action", "reducer", "selector", "middleware", "plugin", "extension", "addon", "module", "package", "library", "framework", "dependency", "import", "export", "require", "use", "inject", "provide", "consume", "produce", "event", "listener", "observer", "subscriber", "publisher", "dispatcher", "emitter", "signal", "broadcast", "notify", "update", "refresh", "reload", "restart", "start", "stop", "pause", "resume", "continue", "break", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "ai": ["ai", "ml", "dl", "nn", "transformer", "attention", "embedding", "token", "context", "window", "batch", "epoch", "gradient", "loss", "metric", "accuracy", "precision", "recall", "f1", "auc", "roc", "confusion", "matrix", "feature", "label", "target", "input", "output", "data", "file", "directory", "folder", "path", "name", "type", "value", "key", "variable", "function", "class", "method", "property", "attribute", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "security": ["security", "auth", "authentication", "authorization", "permission", "role", "scope", "context", "session", "token", "cookie", "header", "query", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "testing": ["test", "unit", "integration", "e2e", "bvt", "smoke", "regression", "performance", "load", "stress", "chaos", "coverage", "mock", "stub", "spy", "fixture", "assertion", "expectation", "result", "output", "input", "data", "file", "directory", "folder", "path", "name", "type", "value", "key", "variable", "function", "class", "method", "property", "attribute", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "devops": ["devops", "ci", "cd", "pipeline", "deploy", "server", "docker", "kubernetes", "cloud", "aws", "azure", "gcp", "ec2", "s3", "lambda", "ecs", "eks", "fargate", "container", "image", "registry", "compose", "swarm", "orchestration", "service", "mesh", "gateway", "proxy", "load balancer", "nginx", "apache", "tomcat", "jetty", "node", "pod", "replica", "deployment", "rollout", "rollback", "canary", "blue-green", "feature flag", "config", "environment", "staging", "production", "development", "local", "remote", "remote", "ssh", "rsync", "git", "version control", "branch", "merge", "rebase", "commit", "push", "pull", "clone", "fork", "pr", "pull request", "issue", "ticket", "sprint", "epic", "story", "task", "milestone", "release", "tag", "version", "changelog", "readme", "docs", "documentation", "wiki", "blog", "post", "article", "tutorial", "guide", "recipe", "pattern", "anti-pattern", "best practice", "convention", "standard", "specification", "interface", "abstraction", "encapsulation", "inheritance", "polymorphism", "composition", "delegation", "injection", "container", "di", "ioc", "mvc", "mvvm", "flux", "redux", "state management", "store", "action", "reducer", "selector", "middleware", "plugin", "extension", "addon", "module", "package", "library", "framework", "dependency", "import", "export", "require", "use", "inject", "provide", "consume", "produce", "event", "listener", "observer", "subscriber", "publisher", "dispatcher", "emitter", "signal", "broadcast", "notify", "update", "refresh", "reload", "restart", "start", "stop", "pause", "resume", "continue", "break", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
+            "ai": ["ai", "ml", "dl", "nn", "transformer", "attention", "embedding", "token", "context", "window", "batch", "epoch", "gradient", "loss", "metric", "accuracy", "precision", "recall", "f1", "auc", "roc", "confusion", "matrix", "feature", "label", "target", "input", "output", "data", "file", "directory", "folder", "path", "name", "type", "value", "key", "variable", "function", "class", "method", "property", "attribute", "parameter", "argument", "return", "yield", "throw", "catch", "try", "finally", "exception", "error", "warning", "log", "console", "print", "debugger", "breakpoint", "step", "next", "previous", "current", "last", "first", "index", "key", "value", "pair", "entry", "item", "element", "node", "tree", "graph", "list", "queue", "stack", "heap", "set", "map", "hash", "sort", "search", "filter", "reduce", "map", "flat", "slice", "splice", "concat", "join", "split", "replace", "match", "regex", "pattern", "template", "literal", "string", "number", "boolean", "null", "undefined", "object", "array", "symbol", "bigint", "promise", "async", "await", "callback", "closure", "scope", "context", "state", "reactive", "immutable", "mutable", "type", "typing", "annotation", "decorator", "generator", "iterator", "comprehension"],
         }
-        found = [name for name, pat in topic_patterns.items() if pat.search(text)]
-        return ",".join(found[:5])
+
+        # Check each category
+        for category, keywords in topic_categories.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    topics.append(category)
+                    break
+
+        # Deduplicate and return top 5
+        seen = set()
+        result = []
+        for t in topics:
+            if t not in seen:
+                seen.add(t)
+                result.append(t)
+                if len(result) >= 5:
+                    break
+
+        return ",".join(result)
 
     def _extract_entities(self, text: str) -> str:
         entities = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", text)
