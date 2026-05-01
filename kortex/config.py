@@ -92,6 +92,9 @@ class KortexConfig:
     # Identity
     soul_path: Optional[str] = None  # custom SOUL.md path (None = hermes default)
 
+    # Focus topic (optional, used for targeted context injection)
+    focus_topic: Optional[str] = None
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "KortexConfig":
         """Create config from a dict (e.g. from YAML)."""
@@ -146,6 +149,7 @@ class KortexConfig:
             show_context_status=data.get("show_context_status", True),
             show_completion_markers=data.get("show_completion_markers", True),
             recent_resolution_window_days=data.get("recent_resolution_window_days", 7.0),
+            focus_topic=data.get("focus_topic"),
         )
 
 
