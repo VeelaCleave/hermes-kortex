@@ -1032,13 +1032,12 @@ class KortexDB:
             "AND e.is_consolidated=0" if not include_consolidated else ""
         )
         # FTS5: query the FTS table first, then JOIN back.
-        # The `rank` pseudo-column breaks when the base table drives the query.
         rows = (
             self._get_conn()
             .execute(
-                """SELECT e.* FROM episodes_fts fts
-                JOIN episodes e ON e.id = fts.rowid
-                WHERE fts MATCH ? AND e.user_id=?
+                """SELECT e.* FROM episodes_fts
+                JOIN episodes e ON e.id = episodes_fts.rowid
+                WHERE episodes_fts MATCH ? AND e.user_id=?
                 """
                 + consolidated_clause
                 + """
@@ -1323,9 +1322,9 @@ class KortexDB:
         rows = (
             self._get_conn()
             .execute(
-                """SELECT f.* FROM facts_fts fts
-                JOIN facts f ON f.id = fts.rowid
-                WHERE fts MATCH ? AND f.status='active' AND f.user_id=?
+                """SELECT f.* FROM facts_fts
+                JOIN facts f ON f.id = facts_fts.rowid
+                WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=?
                 ORDER BY rank
                 LIMIT ?""",
                 (normalized_query, user_id, limit),
@@ -1397,9 +1396,9 @@ class KortexDB:
                 rows = (
                     self._get_conn()
                     .execute(
-                        """SELECT f.* FROM facts_fts fts
-                        JOIN facts f ON f.id = fts.rowid
-                        WHERE fts MATCH ? AND f.status='active' AND f.user_id=? AND f.predicate=?
+                        """SELECT f.* FROM facts_fts
+                        JOIN facts f ON f.id = facts_fts.rowid
+                        WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=? AND f.predicate=?
                         ORDER BY rank LIMIT ?""",
                         (normalized_query, user_id, predicate, limit),
                     )
@@ -1409,9 +1408,9 @@ class KortexDB:
                 rows = (
                     self._get_conn()
                     .execute(
-                        """SELECT f.* FROM facts_fts fts
-                        JOIN facts f ON f.id = fts.rowid
-                        WHERE fts MATCH ? AND f.status='active' AND f.user_id=?
+                        """SELECT f.* FROM facts_fts
+                        JOIN facts f ON f.id = facts_fts.rowid
+                        WHERE facts_fts MATCH ? AND f.status='active' AND f.user_id=?
                         ORDER BY rank LIMIT ?""",
                         (normalized_query, user_id, limit),
                     )
@@ -1653,14 +1652,12 @@ class KortexDB:
         self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
     ) -> List[Reflection]:
         # Query FTS table directly, then join back to reflections for full data.
-        # The `rank` pseudo-column lives on the FTS table and breaks with
-        # SELECT r.* + JOIN patterns (causes "no such column" errors).
         rows = (
             self._get_conn()
             .execute(
-                """SELECT r.* FROM reflections_fts fts
-                JOIN reflections r ON r.id = fts.rowid
-                WHERE fts MATCH ? AND r.user_id=?
+                """SELECT r.* FROM reflections_fts
+                JOIN reflections r ON r.id = reflections_fts.rowid
+                WHERE reflections_fts MATCH ? AND r.user_id=?
                 ORDER BY rank
                 LIMIT ?""",
                 (query, user_id, limit),
