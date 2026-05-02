@@ -540,11 +540,24 @@ class KortexDB:
             conn.executescript(_OCEAN_SCHEMA_SQL)
             from_version = 4
 
-        # v5: Evidence trace index on facts.source_episode_id
+        # v5: Evidence trace index + embeddings table for semantic search
         if from_version < 5:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_facts_source_episode ON facts(source_episode_id)"
             )
+            # Create embeddings table for semantic search (was missing from migration)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_id       INTEGER NOT NULL,
+                    entity_type     TEXT NOT NULL,
+                    embedding_vector BLOB NOT NULL,
+                    created_at      REAL NOT NULL,
+                    user_id         TEXT NOT NULL DEFAULT '__default__'
+                );
+                CREATE INDEX IF NOT EXISTS idx_embeddings_entity ON embeddings(entity_type, entity_id);
+                CREATE INDEX IF NOT EXISTS idx_embeddings_user ON embeddings(user_id);
+            """)
             from_version = 5
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
