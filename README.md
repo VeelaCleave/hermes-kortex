@@ -1,20 +1,26 @@
-# Project KORTEX
+# KORTEX — Experiential Memory for Hermes Agent
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org)
+[![Schema v4](https://img.shields.io/badge/schema-v4-orange.svg)](kortex/db.py)
 
 Experiential memory + lossless context for Hermes Agent.
 
 KORTEX gives Hermes two different but complementary memory layers:
 
 - **MemoryProvider layer** for durable cross-session memory
-  - user preferences
-  - facts
-  - open loops / commitments
-  - reflections
-  - relationship state
+  - user preferences, stable facts, open loops, reflections
+  - emotional awareness & relationship modeling
   - SOUL.md identity evolution
+  - OCEAN personality trait modeling
+  - semantic embeddings for vector-enhanced recall
 - **ContextEngine layer** for same-session lossless context
   - archives exact dropped spans at compression time
-  - emits deterministic checkpoints instead of lossy summary-only collapse
+  - emits deterministic checkpoints instead of lossy collapse
   - supports bounded exact re-expansion through engine tools
+- **Dream System** for async offline memory maintenance
+  - DayDream: quick post-compaction pass (~30s)
+  - REMSleep: deep idle-time optimization (~5min)
 
 This repo is meant to be enough for someone else to reproduce the stack, not just read about it.
 
@@ -24,42 +30,52 @@ This repo is meant to be enough for someone else to reproduce the stack, not jus
 
 KORTEX turns Hermes into a system with:
 
-- **episodic memory** from every turn
-- **stable facts** with contradiction handling
-- **open loop tracking** for promises, unresolved asks, and follow-ups
-- **emotional awareness** and affect calibration
-- **relationship modeling** over time
-- **self-reflection** from successes, mistakes, and user style corrections
+- **Episodic memory** from every turn
+- **Stable facts** with contradiction handling
+- **Open loop tracking** for promises, unresolved asks, and follow-ups
+- **Emotional awareness** with per-user affect calibration
+- **Relationship modeling** over time
+- **OCEAN Big Five personality** trait modeling
+- **Self-reflection** from successes, mistakes, and user style corrections
 - **SOUL.md-driven identity evolution**
-- **linked memory graph traversal**
-- **lossless context compression** for same-session recall after Hermes compacts history
+- **Linked memory graph traversal**
+- **Lossless context compression** for same-session recall after Hermes compacts history
+- **Async dream-state maintenance** (DayDream + REMSleep)
+- **Semantic embeddings** for vector-enhanced recall
+- **Lightweight context injection** optimized for MOE models
 
 ---
 
-## Current architecture
+## Architecture
 
-KORTEX now has two active Hermes integration points.
+KORTEX has three active Hermes integration points.
 
-### 1. Memory provider (`memory.provider: kortex`)
+### 1. Memory Provider (`memory.provider: kortex`)
 
 Main responsibilities:
 
 - ingest turns after completion
 - extract facts / loops / reflections
 - maintain relationship state
+- OCEAN personality scoring
 - prefetch passive recall before the next turn
 - expose KORTEX memory tools
 
 Primary files:
 
-- `kortex/provider.py`
-- `kortex/ingest.py`
-- `kortex/recall.py`
-- `kortex/reflect.py`
-- `kortex/linker.py`
-- `kortex/promote.py`
+- `kortex/provider.py` — Hermes MemoryProvider integration
+- `kortex/ingest.py` — ingestion, noise filtering, fact dedup
+- `kortex/recall.py` — ranked passive recall, lightweight mode
+- `kortex/reflect.py` — reflections and identity deltas
+- `kortex/linker.py` — graph links
+- `kortex/promote.py` — SOUL.md promotion path
+- `kortex/affect.py` — affect signal extraction
+- `kortex/calibrate.py` — per-user affect calibration
+- `kortex/ocean.py` — OCEAN Big Five personality modeling
+- `kortex/semantic.py` — semantic embedding utilities
+- `kortex/relationship.py` — relationship dynamics
 
-### 2. Context engine (`context.engine: kortex`)
+### 2. Context Engine (`context.engine: kortex`)
 
 Main responsibilities:
 
@@ -70,58 +86,95 @@ Main responsibilities:
 
 Primary files:
 
-- `kortex/context_engine.py`
-- `kortex/db.py`
+- `kortex/context_engine.py` — Hermes ContextEngine integration
+- `kortex/db.py` — SQLite schema + migrations + lossless storage
 
-### Why both exist
+### 3. Dream System (async maintenance)
 
-The split is intentional:
+Main responsibilities:
+
+- DayDream: quick post-compaction pass (expire stale loops, prune cold facts)
+- REMSleep: deep idle-time optimization (consolidate, dedup, compact)
+
+Primary files:
+
+- `kortex/dream.py` — DayDream + REMSleep orchestration
+- `kortex/consolidate.py` — episode consolidation logic
+
+### Why all three exist
 
 - **MemoryProvider** = durable semantic memory across sessions
 - **ContextEngine** = exact same-session transcript lineage after compression
+- **Dream System** = async optimization that runs when the agent is idle
 
 That means KORTEX does **not** rely only on the LLM deciding to remember something.
 
 ---
 
-## Features
+## Key Features
 
-### Durable memory features
+### Lightweight Context Injection (V2)
 
-- **Episodic Memory** — Every turn is stored with salience, valence, arousal, topics, and entities.
-- **Stable Facts** — Durable user/project facts with confidence and contradiction/supersession handling.
-- **Open Loops** — Commitments, follow-ups, and unresolved threads are tracked and can be auto-resolved.
-- **Emotional Awareness** — Multi-dimensional affect scoring and per-user baseline calibration.
-- **Relationship Dynamics** — Warmth, trust, tension, familiarity, humor, formality, and volatility evolve over time.
-- **Reflections** — Mistakes, preferences, patterns, and behavior-shaping lessons are extracted and reinforced.
-- **Identity Evolution** — Identity deltas can be reviewed and promoted into `SOUL.md`.
-- **Graph Recall** — Episode ↔ fact ↔ reflection linking for graph-enhanced retrieval.
+KORTEX V2 introduced lightweight context injection (`build_context(lightweight=True)`):
 
-### Lossless context features
+- Skips graph traversal, link enrichment, OCEAN scoring, and conversation summaries
+- ~10x faster context building, ideal for MOE models
+- Non-lightweight mode still available for deep recall
 
-- **Exact dropped-span archival** at compression time
-- **Deterministic checkpoint messages** instead of only lossy summary collapse
-- **Session aliasing across Hermes compression splits**
-- **Archived transcript search** via `kortex_recall`
-- **Exact historical re-expansion** via `kortex_expand`
+### OCEAN Personality Modeling (V2)
+
+Tracks Big Five personality traits per user using heuristic text patterns:
+
+- **O**penness, **C**onscientiousness, **E**xtraversion, **A**greeableness, **N**euroticism
+- EMA-smoothed scores that evolve over time
+- Stored in dedicated DB tables (schema v4)
+
+### Dream State Maintenance (V2)
+
+Two-tier async memory optimization:
+
+- **DayDream**: Quick pass after compaction (~30s). Expires stale loops, prunes cold facts/reflections.
+- **REMSleep**: Deep pass when idle (~5min). Full consolidation, dedup, DB vacuum.
+
+### Garbage Ingestion Filters (V2)
+
+- Provider-level content filters (`_filter_user_content`, `_filter_assistant_content`)
+- Fact deduplication using bigram Jaccard similarity
+- System noise exclusion patterns
+
+### Semantic Embeddings (V2)
+
+- Dedicated `embeddings` table for vector-enhanced recall
+- Supports future vector search integration
 
 ---
 
-## Repo layout
+## Repo Layout
 
-Important files:
-
-- `kortex/provider.py` — Hermes MemoryProvider integration
-- `kortex/context_engine.py` — Hermes ContextEngine integration
-- `kortex/db.py` — SQLite schema + migrations + lossless storage
-- `kortex/config.py` — plugin config loader
-- `kortex/ingest.py` — ingestion and extraction
-- `kortex/recall.py` — ranked passive recall
-- `kortex/reflect.py` — reflections and identity deltas
-- `kortex/linker.py` — graph links
-- `kortex/promote.py` — SOUL.md promotion path
-- `kortex/export.py` — export/import backup tooling
-- `tests/` — full test suite
+```
+kortex/
+├── provider.py      — Hermes MemoryProvider integration
+├── context_engine.py — Hermes ContextEngine integration
+├── db.py            — SQLite schema v4 + migrations
+├── config.py        — plugin config loader
+├── ingest.py        — ingestion, noise filtering, fact dedup
+├── recall.py        — ranked passive recall (lightweight + full)
+├── reflect.py       — reflections and identity deltas
+├── linker.py        — graph links
+├── promote.py       — SOUL.md promotion path
+├── export.py        — export/import backup tooling
+├── affect.py        — affect signal extraction
+├── calibrate.py     — per-user affect calibration
+├── ocean.py         — OCEAN Big Five personality modeling
+├── semantic.py      — semantic embedding utilities
+├── relationship.py  — relationship dynamics
+├── consolidate.py   — episode consolidation logic
+├── dream.py         — DayDream + REMSleep async maintenance
+├── extract_llm.py   — LLM-based extraction helpers
+├── models.py        — data models (Episode, Fact, Loop, etc.)
+├── summaries.py     — conversation summary management
+└── time_utils.py    — temporal helpers
+```
 
 ---
 
@@ -129,7 +182,7 @@ Important files:
 
 ### Hermes requirements
 
-KORTEX v0.2.0 requires **Hermes 4.0+** with the new plugin surface.
+KORTEX V2 requires **Hermes 4.0+** with the new plugin surface.
 
 Required interfaces:
 
@@ -188,7 +241,7 @@ plugins:
   kortex:
     auto_extract: true
     search_format: narrative
-    total_budget: 1800
+    total_budget: 1230
     passive_recall: true
     prefer_passive_recall: true
     context_engine_enabled: true
@@ -207,11 +260,13 @@ plugins:
     affect_calibration_min_samples: 20
 ```
 
+> **Note:** `total_budget` reduced from 1800 → 1230 for MOE model optimization.
+> Lightweight context injection is the default, so lower budgets work well.
+
 ### Verify
 
 ```bash
 python3 - <<'PY'
-from kortex import register
 from kortex.provider import KortexProvider
 from kortex.context_engine import KortexContextEngine
 
@@ -222,7 +277,7 @@ PY
 
 ---
 
-## SOUL.md requirements
+## SOUL.md Requirements
 
 If you want identity evolution like the live stack, you also need a `SOUL.md` file.
 
@@ -256,44 +311,37 @@ If you do not want identity evolution, you can still run KORTEX without using `k
 
 ---
 
-## Recommended Hermes settings for this stack
+## Dream System Usage
 
-These are not strictly required, but they reproduce the intended setup more closely.
+### DayDream (Quick Maintenance)
 
-### Tool-use enforcement
+Run after compaction to keep memory fresh:
 
-If using Qwen or similar models, Hermes’ `auto` enforcement may be too weak.
-
-Recommended:
-
-```yaml
-agent:
-  tool_use_enforcement: ["gpt", "codex", "qwen"]
+```bash
+python3 -m kortex.dream --mode daydream --db-path ~/.hermes/kortex.db
 ```
 
-### Web/browser capability
+### REMSleep (Deep Optimization)
 
-If you want Hermes to actually use web/browser tools instead of falling back to shell patterns, make sure your normal Hermes web/browser tool credentials are configured too.
+Run during idle time for full optimization:
 
-### Memory enabled
-
-```yaml
-memory:
-  memory_enabled: true
-  user_profile_enabled: true
-  provider: kortex
+```bash
+python3 -m kortex.dream --mode remsleep --db-path ~/.hermes/kortex.db
 ```
 
-### Context engine enabled
+### Auto-trigger (via Hermes config)
 
 ```yaml
-context:
-  engine: kortex
+plugins:
+  kortex:
+    dream:
+      daydream_after_compaction: true
+      remsleep_interval_hours: 4
 ```
 
 ---
 
-## KORTEX config reference
+## KORTEX Config Reference
 
 Configured under:
 
@@ -303,11 +351,9 @@ plugins:
     ...
 ```
 
-Important keys:
-
 ### Recall / injection
 
-- `total_budget` — hard recall budget target (default `1800`)
+- `total_budget` — hard recall budget target (default `1230`, reduced for MOE)
 - `max_episodes_per_recall`
 - `max_conversation_summaries_per_recall`
 - `max_facts_per_recall`
@@ -347,9 +393,14 @@ Important keys:
 
 - `context_engine_enabled`
 
+### Dream system
+
+- `dream.daydream_after_compaction`
+- `dream.remsleep_interval_hours`
+
 ---
 
-## Slash commands
+## Slash Commands
 
 KORTEX registers `/memory` for direct user access:
 
@@ -361,7 +412,7 @@ KORTEX registers `/memory` for direct user access:
 /memory consolidate  — merge old episodes into summaries
 ```
 
-## Agent-facing tools
+## Agent-Facing Tools
 
 ### Memory provider tools
 
@@ -395,7 +446,7 @@ KORTEX registers `/memory` for direct user access:
 
 ---
 
-## Lossless context behavior
+## Lossless Context Behavior
 
 When Hermes decides to compress:
 
@@ -405,7 +456,7 @@ When Hermes decides to compress:
 4. KORTEX emits a deterministic checkpoint message
 5. Later, the model can use `kortex_recall` / `kortex_expand` to recover exact prior turns
 
-### Important limitation
+### Important Limitation
 
 Only **KORTEX-managed compressions from activation onward** are truly lossless.
 
@@ -440,45 +491,72 @@ KORTEX stores:
 - entity links
 - emotion logs
 - conversation summaries
+- OCEAN personality profiles (schema v4)
+- semantic embeddings (schema v4)
 - lossless context conversations / aliases / archived messages / spans / refs / checkpoints
 
----
+### Schema Version History
 
-## Export / backup
-
-KORTEX supports JSON export/import via `kortex_export`.
-
-Use this for:
-
-- migration
-- backup
-- transferring memories between environments
+| Version | Changes |
+|---------|-----------------------------|
+| v1 | Initial schema: episodes, facts, loops, reflections, relationships, links |
+| v2 | Added lossless context tables, conversation summaries |
+| v3 | Added affect calibration tables, semantic embeddings |
+| v4 | Added OCEAN personality tables, refined affect schema |
 
 ---
 
 ## Testing
 
-Run full verification:
-
 ```bash
+cd hermes-kortex
 python3 -m pytest -q
 ```
 
-Current passing state in this repo:
-
-- `453 passed`
-
-Targeted lossless-engine validation also passes.
+Current state: **494 tests** (all passing)
 
 ---
 
-## Reproducing the exact live stack
+## Version History
+
+### V2 (Current)
+
+New in V2:
+
+- **Lightweight context injection** — ~10x faster, MOE-optimized
+- **OCEAN personality modeling** — Big Five trait tracking
+- **Dream system** — DayDream + REMSleep async maintenance
+- **Semantic embeddings** — Vector-enhanced recall table
+- **Garbage ingestion filters** — Noise reduction, fact dedup
+- **Schema v4** — OCEAN tables, refined affect
+- **Reduced total_budget** — 1800 → 1230 for MOE models
+
+### V1.1
+
+- Compression timeout fixes
+- Batch refs optimization
+- Garbage ingestion improvements
+- Fact deduplication (bigram Jaccard)
+- Content filtering
+
+### V1.0
+
+- Episodic memory, facts, loops, reflections
+- Relationship modeling
+- SOUL.md identity evolution
+- Graph recall
+- Lossless context engine
+- Affect calibration
+
+---
+
+## Reproducing the Exact Live Stack
 
 To reproduce on another machine:
 
 1. `pip install hermes-kortex`
-2. Configure `~/.hermes/config.yaml` with the settings from **Configure Hermes** above
-3. Create `~/.hermes/SOUL.md` (starter template below)
+2. Configure `~/.hermes/config.yaml` with the settings above
+3. Create `~/.hermes/SOUL.md`
 
 Minimum config:
 
@@ -494,28 +572,22 @@ memory:
 plugins:
   kortex:
     auto_extract: true
-    total_budget: 1800
+    total_budget: 1230
     passive_recall: true
     context_engine_enabled: true
     passive_context_hint: true
 ```
 
-If using Qwen-like models:
-
-```yaml
-agent:
-  tool_use_enforcement: ["gpt", "codex", "qwen"]
-```
-
 ---
 
-## Notes for adopters
+## Notes for Adopters
 
-- Hermes core changes are intentionally avoided.
-- KORTEX is designed as a plugin-side system.
-- Uses Hermes 4.0+ pip entry-points for auto-discovery.
-- Falls back gracefully to manual `register_tool` + `register_hook` for older Hermes versions.
-- The `kind: exclusive` in plugin.yaml ensures only one external memory provider runs at a time.
+- Hermes core changes are intentionally avoided
+- KORTEX is designed as a plugin-side system
+- Uses Hermes 4.0+ pip entry-points for auto-discovery
+- Falls back gracefully to manual `register_tool` + `register_hook` for older Hermes versions
+- The `kind: exclusive` in `plugin.yaml` ensures only one external memory provider runs at a time
+- Lightweight mode is the default — non-lightweight recall is available for deep dives
 
 ---
 
@@ -525,4 +597,4 @@ MIT
 
 ## Credits
 
-Built for Hermes Agent.
+Built for Hermes Agent by VeelaCleave.
