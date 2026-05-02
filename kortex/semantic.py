@@ -1,13 +1,14 @@
-"""Semantic memory graph for KORTEX.
+"""Semantic search layer for KORTEX.
 
-Uses TF-IDF vectorization to create lightweight embeddings for episodes and facts.
-Enables semantic similarity search without requiring a sentence transformer model.
+Provides embedding-based similarity search alongside FTS5 full-text search.
+Uses TF-IDF vectorization for lightweight embeddings without requiring a sentence transformer.
 
 Architecture:
 - TF-IDF embeddings (pure numpy, ~5ms per turn)
 - Cosine similarity search
-- Hybrid scoring (FTS5 + semantic)
-- Graph enhancement with semantic edges
+- Hybrid scoring (FTS5 + semantic combined)
+- Auto-embedding on ingestion
+- Batch embedding for existing episodes/facts
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import logging
 import math
 import re
 from collections import Counter
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -27,21 +28,23 @@ logger = logging.getLogger(__name__)
 # ── TF-IDF parameters ────────────────────────────────────────────────────
 VECTOR_DIM = 128  # embedding dimensionality
 MIN_TOKEN_LEN = 2  # filter out single-char tokens
+EMBEDDING_DIM = VECTOR_DIM  # alias for clarity
 
 
-class SemanticGraph:
-    """Semantic memory graph using TF-IDF embeddings.
+class SemanticSearch:
+    """Semantic search layer: embedding-based similarity search alongside FTS5.
 
-    Embeds episodes and facts into a shared vector space, enabling:
-    - Semantic similarity search (cosine distance)
-    - Nearest-neighbor traversal
-    - Hybrid scoring (FTS5 + semantic)
+    Features:
+    - Auto-embed episodes and facts during ingestion
+    - Hybrid search combining FTS5 rank + cosine similarity
+    - Batch embedding for retroactive coverage
+    - Semantic nearest-neighbor lookup
     """
 
     def __init__(self, db: KortexDB):
         self._db = db
         self._vocab: Dict[str, int] = {}
-        self._idf: np.ndarray = np.zeros(VECTOR_DIM, dtype=np.float32)
+        self._idf: np.ndarray = np.zeros(EMBEDDING_DIM, dtype=np.float32)
         self._built = False
 
     def _tokenize(self, text: str) -> List[str]:
@@ -70,21 +73,30 @@ class SemanticGraph:
                 doc_freq.update(set(tokens))
 
             n_docs = max(len(texts), 1)
-            # Filter: appear in at least 2 docs, at most 80% of docs
+            # Filter: appear in at least 1 doc, at most 80% of docs
+            # For small corpora (<10 docs), relax to at least 1 doc
+            min_df = 1 if n_docs < 10 else 2
+            # For small corpora, also relax max_df to 90%
+            max_df_ratio = 0.9 if n_docs < 10 else 0.8
             valid_tokens = {
                 token for token, df in doc_freq.items()
-                if df >= 2 and df <= n_docs * 0.8
+                if df >= min_df and df <= n_docs * max_df_ratio
             }
+
+            # If still empty (very small corpus), accept any token
+            if not valid_tokens and doc_freq:
+                valid_tokens = set(doc_freq.keys())
 
             # Sort by frequency and index
             sorted_tokens = sorted(valid_tokens, key=lambda t: doc_freq[t], reverse=True)
-            self._vocab = {token: idx for idx, token in enumerate(sorted_tokens[:VECTOR_DIM])}
+            self._vocab = {token: idx for idx, token in enumerate(sorted_tokens[:EMBEDDING_DIM])}
 
-            # Compute IDF: log(N / df)
-            self._idf = np.zeros(max(len(self._vocab), VECTOR_DIM), dtype=np.float32)
+            # Compute IDF: log(N / df) with smoothing to avoid division issues
+            self._idf = np.zeros(max(len(self._vocab), EMBEDDING_DIM), dtype=np.float32)
             for token, idx in self._vocab.items():
                 df = doc_freq.get(token, 1)
-                self._idf[idx] = math.log(n_docs / df)
+                # Smooth IDF: log((N + 1) / (df + 1)) + 1 avoids zero IDF
+                self._idf[idx] = math.log((n_docs + 1) / (df + 1)) + 1.0
 
             self._built = True
             return self._vocab
@@ -120,75 +132,165 @@ class SemanticGraph:
             vec /= norm
         return vec
 
-    def find_similar_episodes(
+    def embed_episode(self, episode_id: int, user_text: str, assistant_text: str, user_id: str = DEFAULT_USER_ID) -> Optional[bytes]:
+        """Generate and store embedding for an episode."""
+        combined = f"{user_text} {assistant_text}"
+        vec = self.embed(combined)
+        self._db.insert_embedding(episode_id, "episode", vec.tobytes(), user_id=user_id)
+        return vec.tobytes()
+
+    def embed_fact(self, fact_id: int, text: str, user_id: str = DEFAULT_USER_ID) -> Optional[bytes]:
+        """Generate and store embedding for a fact."""
+        vec = self.embed(text)
+        self._db.insert_embedding(fact_id, "fact", vec.tobytes(), user_id=user_id)
+        return vec.tobytes()
+
+    def batch_embed_episodes(self, user_id: str = DEFAULT_USER_ID) -> int:
+        """Embed all unembedded episodes. Returns count of newly embedded."""
+        conn = self._db._get_conn()
+        # Find episodes without embeddings
+        rows = conn.execute("""
+            SELECT e.id, e.user_text, e.assistant_text
+            FROM episodes e
+            LEFT JOIN embeddings emb ON emb.entity_type='episode' AND emb.entity_id=e.id AND emb.user_id=?
+            WHERE emb.entity_id IS NULL
+        """, (user_id,)).fetchall()
+        
+        count = 0
+        for row in rows:
+            self.embed_episode(row["id"], row["user_text"], row["assistant_text"], user_id)
+            count += 1
+        return count
+
+    def batch_embed_facts(self, user_id: str = DEFAULT_USER_ID) -> int:
+        """Embed all unembedded facts. Returns count of newly embedded."""
+        conn = self._db._get_conn()
+        rows = conn.execute("""
+            SELECT f.id, f.object_text
+            FROM facts f
+            LEFT JOIN embeddings emb ON emb.entity_type='fact' AND emb.entity_id=f.id AND emb.user_id=?
+            WHERE emb.entity_id IS NULL
+        """, (user_id,)).fetchall()
+        
+        count = 0
+        for row in rows:
+            self.embed_fact(row["id"], row["object_text"], user_id)
+            count += 1
+        return count
+
+    def search_episodes_hybrid(
         self,
         query: str,
         limit: int = 10,
         min_similarity: float = 0.3,
         user_id: str = DEFAULT_USER_ID,
-    ) -> List[Tuple[int, float]]:
-        """Find episodes semantically similar to a query.
+        semantic_weight: float = 0.6,
+        fts_weight: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search: combine FTS5 rank + cosine similarity.
 
-        Returns list of (episode_id, cosine_similarity) sorted by similarity.
+        Returns list of dicts with episode data, scores, and ranking.
         """
         query_vec = self.embed(query)
+        
+        # Get FTS5 results
+        fts_results = self._db.search_episodes(query, limit=limit * 2, user_id=user_id)
+        fts_ids = {ep.id: rank for rank, ep in enumerate(fts_results)}
+        
+        # Get all episodes (not just salient ones) for semantic comparison
+        conn = self._db._get_conn()
+        rows = conn.execute(
+            "SELECT id, user_text, assistant_text, salience, timestamp FROM episodes WHERE user_id=? AND is_consolidated=0 ORDER BY timestamp DESC LIMIT 200",
+            (user_id,)
+        ).fetchall()
+        
         results = []
-
-        # Get candidate episodes from DB
-        episodes = self._db.get_salient_episodes(
-            min_salience=0.1, limit=100, user_id=user_id
-        )
-
-        for ep in episodes:
-            if not ep.id:
-                continue
-            # Get stored embedding from DB
-            emb_row = self._db.get_semantic_embedding("episode", ep.id, user_id=user_id)
-            if emb_row and emb_row.get("embedding"):
-                ep_vec = np.frombuffer(
-                    bytes(emb_row["embedding"]), dtype=np.float32
-                )
-            else:
-                continue
-
-            sim = self._cosine(query_vec, ep_vec)
-            if sim >= min_similarity:
-                results.append((ep.id, sim))
-
-        results.sort(key=lambda x: x[1], reverse=True)
+        for row in rows:
+            ep_id = row["id"]
+            ep_user_text = row["user_text"] or ""
+            ep_assistant_text = row["assistant_text"] or ""
+            ep_salience = row["salience"] or 0.5
+            ep_timestamp = row["timestamp"] or 0
+            
+            # Check if this episode is in FTS results
+            fts_rank = fts_ids.get(ep_id)
+            
+            # Get stored embedding
+            emb_row = self._db.get_embedding("episode", ep_id, user_id=user_id)
+            if emb_row and emb_row.get("embedding_vector"):
+                ep_vec = np.frombuffer(bytes(emb_row["embedding_vector"]), dtype=np.float32)
+                sim = self._cosine(query_vec, ep_vec)
+                
+                if sim >= min_similarity:
+                    # Hybrid score: normalize FTS rank + combine
+                    fts_score = 1.0 / (1 + fts_rank) if fts_rank is not None else 0.0
+                    hybrid_score = (fts_score * fts_weight) + (sim * semantic_weight)
+                    
+                    results.append({
+                        "id": ep_id,
+                        "user_text": ep_user_text,
+                        "assistant_text": ep_assistant_text,
+                        "salience": ep_salience,
+                        "timestamp": ep_timestamp,
+                        "semantic_score": round(sim, 4),
+                        "fts_rank": fts_rank,
+                        "hybrid_score": round(hybrid_score, 4),
+                    })
+        
+        # Sort by hybrid score
+        results.sort(key=lambda x: x["hybrid_score"], reverse=True)
         return results[:limit]
 
-    def find_similar_facts(
+    def search_facts_hybrid(
         self,
         query: str,
         limit: int = 10,
         min_similarity: float = 0.3,
         user_id: str = DEFAULT_USER_ID,
-    ) -> List[Tuple[int, float]]:
-        """Find facts semantically similar to a query."""
+        semantic_weight: float = 0.6,
+        fts_weight: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search for facts: combine FTS5 rank + cosine similarity."""
         query_vec = self.embed(query)
+        
+        # Get FTS5 results on facts
+        fts_results = self._db.search_facts(query, limit=limit * 2, user_id=user_id)
+        fts_ids = {fact.id: rank for rank, fact in enumerate(fts_results)}
+        
+        # Get all active facts
+        conn = self._db._get_conn()
+        rows = conn.execute(
+            "SELECT id, object_text, confidence FROM facts WHERE user_id=? AND status='active' LIMIT 200",
+            (user_id,)
+        ).fetchall()
+        
         results = []
-
-        facts = self._db.get_active_facts(
-            subject_type="user", limit=100, user_id=user_id
-        )
-
-        for fact in facts:
-            if not fact.id:
-                continue
-            emb_row = self._db.get_semantic_embedding("fact", fact.id, user_id=user_id)
-            if emb_row and emb_row.get("embedding"):
-                fact_vec = np.frombuffer(
-                    bytes(emb_row["embedding"]), dtype=np.float32
-                )
-            else:
-                continue
-
-            sim = self._cosine(query_vec, fact_vec)
-            if sim >= min_similarity:
-                results.append((fact.id, sim))
-
-        results.sort(key=lambda x: x[1], reverse=True)
+        for row in rows:
+            fact_id = row["id"]
+            fact_text = row["object_text"] or ""
+            fact_confidence = row["confidence"] or 0.5
+            
+            fts_rank = fts_ids.get(fact_id)
+            
+            emb_row = self._db.get_embedding("fact", fact_id, user_id=user_id)
+            if emb_row and emb_row.get("embedding_vector"):
+                fact_vec = np.frombuffer(bytes(emb_row["embedding_vector"]), dtype=np.float32)
+                sim = self._cosine(query_vec, fact_vec)
+                
+                if sim >= min_similarity:
+                    fts_score = 1.0 / (1 + fts_rank) if fts_rank is not None else 0.0
+                    hybrid_score = (fts_score * fts_weight) + (sim * semantic_weight)
+                    
+                    results.append({
+                        "id": fact_id,
+                        "text": fact_text,
+                        "confidence": fact_confidence,
+                        "semantic_score": round(sim, 4),
+                        "fts_rank": fts_rank,
+                        "hybrid_score": round(hybrid_score, 4),
+                    })
+        
+        results.sort(key=lambda x: x["hybrid_score"], reverse=True)
         return results[:limit]
 
     @staticmethod

@@ -2788,7 +2788,9 @@ class KortexDB:
             )
             .fetchone()
         )
-        return dict(row) if row else None
+        if row is None:
+            return None
+        return {k: row[k] for k in row.keys()}
 
     def delete_embedding(
         self,
