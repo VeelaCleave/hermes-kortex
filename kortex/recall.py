@@ -710,6 +710,36 @@ class Recall:
 
         return relevance * 0.3 + salience * 0.25 + recency * 0.25 + emotional * 0.2 + emotion_boost
 
+    def _relationship_boost(self, ep: Episode) -> float:
+        """Boost episodes that have strong entity/relationship connections.
+
+        Episodes linked to other high-salience episodes or facts get a boost,
+        making them surface more often during recall.
+        """
+        if not ep.id:
+            return 0.0
+
+        boost = 0.0
+        # Count related episodes
+        links_out = self._db.get_links_from("episode", ep.id, user_id=ep.user_id)
+        links_in = self._db.get_links_to("episode", ep.id, user_id=ep.user_id)
+
+        # Each outgoing link to another episode adds a small boost
+        for link in links_out:
+            if link["dst_type"] == "episode":
+                boost += 0.05
+            elif link["dst_type"] == "fact":
+                boost += 0.08  # Facts are stronger signals
+
+        # Each incoming link adds a boost (other things point to this episode)
+        for link in links_in:
+            if link["src_type"] == "episode":
+                boost += 0.03
+            elif link["src_type"] == "fact":
+                boost += 0.05
+
+        return min(boost, 0.4)  # Cap at 0.4 so it doesn't dominate
+
     def _episode_strength(self, ep: Episode, now: float) -> float:
         last_access = ep.last_accessed_at or ep.timestamp
         days_since_access = max((now - last_access) / 86400, 0.0)
