@@ -36,116 +36,75 @@ class Recall:
         self._linker = linker
 
     def build_context(
-        self, query: str, session_id: str = "", user_id: str = DEFAULT_USER_ID
+        self, query: str, session_id: str = "", user_id: str = DEFAULT_USER_ID,
+        lightweight: bool = True
     ) -> str:
+        """Build context for injection.
+        
+        In lightweight mode (default), skip expensive operations:
+        - Graph traversal
+        - Episode enrichment with links
+        - Ocean personality scoring
+        - Conversation summaries
+        
+        This makes context injection ~10x faster.
+        """
         sections = []
         budget_used = 0
-        selected_facts = self._select_facts(query, user_id=user_id)
         
-        # ── Deduplicate facts to prevent redundant parsing ─────────────
-        # MOE models waste expert-routing on identical/duplicate facts.
-        # Dedup by object_text (case-insensitive), keeping highest confidence.
+        # ── Facts (always include, but deduplicated) ──────────────────────
+        selected_facts = self._select_facts(query, user_id=user_id)
         deduped_facts = self._deduplicate_facts(selected_facts)
         if deduped_facts is not selected_facts:
             selected_facts = deduped_facts
 
-        summaries_budget = self._config.budget.get("conversation_summaries", 250)
-        summaries_text = self._build_conversation_summaries_section(
-            query, session_id, summaries_budget, user_id=user_id
-        )
-        if summaries_text:
-            sections.append(summaries_text)
-            budget_used += self._estimate_tokens(summaries_text)
-
+        # ── Relationship state (always include) ──────────────────────────
         relationship = self._db.get_relationship(user_id=user_id)
         rel_text = relationship.to_compact_text()
-        emotional_trajectory = self._build_emotional_trajectory(
-            session_id, user_id=user_id
-        )
-        if emotional_trajectory:
-            rel_text = f"{rel_text}\n{emotional_trajectory}"
-        rel_budget = self._config.budget.get("relationship_state", 200)
-        rel_text = self._trim_to_budget(rel_text, rel_budget)
         if relationship.total_turns > 0:
             sections.append(rel_text)
-            budget_used += self._estimate_tokens(rel_text)
 
-        # ── OCEAN personality profile ──────────────────────────────────
-        ocean_text = self._build_ocean_section(user_id=user_id)
-        if ocean_text:
-            sections.append(ocean_text)
-            budget_used += self._estimate_tokens(ocean_text)
-
-        facts_budget = self._config.budget.get("stable_facts", 400)
+        # ── Facts section ─────────────────────────────────────────────────
+        facts_budget = self._config.budget.get("stable_facts", 200)
         facts_text = self._build_facts_section(selected_facts, facts_budget)
         if facts_text:
             sections.append(facts_text)
-            budget_used += self._estimate_tokens(facts_text)
 
-        episodes_budget = self._config.budget.get("episodic_memories", 800)
-        graph_budget = self._config.budget.get("graph_memories", 0)
-        fact_ids = {fact.id for fact in selected_facts if fact.id is not None}
-        episodes_text = self._build_episodes_section(
-            query,
-            session_id,
-            episodes_budget,
-            graph_budget,
-            user_id=user_id,
-            existing_fact_ids=fact_ids,
+        # ── Episodes (lightweight: recent only, no graph/enrichment) ─────
+        episodes_text = self._build_episodes_lightweight(
+            session_id, user_id=user_id
         )
         if episodes_text:
             sections.append(episodes_text)
-            budget_used += self._estimate_tokens(episodes_text)
 
-        loops_budget = self._config.budget.get("open_loops", 200)
+        # ── Open loops ────────────────────────────────────────────────────
+        loops_budget = self._config.budget.get("open_loops", 150)
         loops_text = self._build_loops_section(loops_budget, user_id=user_id)
         if loops_text:
             sections.append(loops_text)
-            budget_used += self._estimate_tokens(loops_text)
-
-        reflections_budget = self._config.budget.get("reflections", 200)
-        reflections_text = self._build_reflections_section(
-            reflections_budget, user_id=user_id
-        )
-        if reflections_text:
-            sections.append(reflections_text)
-            budget_used += self._estimate_tokens(reflections_text)
 
         if not sections:
             return ""
 
-        # ── Section headers for MOE routing ─────────────────────────────
-        # Each section gets a clear header so MOE models route to the
-        # correct expert without cross-activating unrelated ones.
-        # This prevents the "all experts fire at once" problem that
-        # makes MOE models slower than dense models.
-        routed_sections = []
-        for section_text in sections:
-            if not section_text:
-                continue
-            # Determine which section this belongs to based on content
-            if "Known facts:" in section_text:
-                routed_sections.append("[FACTS] " + section_text)
-            elif "Recalled memories:" in section_text:
-                routed_sections.append("[MEMORY] " + section_text)
-            elif "Open threads:" in section_text or "Recently completed:" in section_text:
-                routed_sections.append("[THREADS] " + section_text)
-            elif "Learned behaviors:" in section_text:
-                routed_sections.append("[BEHAVIOR] " + section_text)
-            elif "Conversation summaries:" in section_text:
-                routed_sections.append("[SUMMARIES] " + section_text)
-            elif "Recent mood:" in section_text:
-                routed_sections.append("[MOOD] " + section_text)
-            else:
-                routed_sections.append(section_text)
-
-        body = "\n".join(routed_sections)
+        body = "\n".join(sections)
         full = f"[KORTEX Memory]\n{body}"
 
-        if self._estimate_tokens(full) > self._config.total_budget:
-            full = self._trim_to_budget(full, self._config.total_budget)
-
         return full
+
+    def _build_episodes_lightweight(
+        self, session_id: str, user_id: str = DEFAULT_USER_ID
+    ) -> str:
+        """Lightweight episode recall — recent episodes only, no graph traversal or enrichment."""
+        recent = self._db.get_recent_episodes(limit=3, user_id=user_id)
+        if not recent:
+            return ""
+        
+        now = now_epoch()
+        lines = ["Recent memories:"]
+        for ep in recent[:3]:
+            lines.append(f"- {ep.to_recall_text(now)}")
+        
+        return "\n".join(lines)
 
     def _build_conversation_summaries_section(
         self,

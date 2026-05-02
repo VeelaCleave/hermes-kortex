@@ -89,6 +89,10 @@ class KortexConfig:
     show_completion_markers: bool = True
     recent_resolution_window_days: float = 7.0  # How long to show resolved loops in context
     
+    # Lightweight context mode (skip graph traversal, enrichment, etc.)
+    # Use this to speed up context injection during compaction/normal turns
+    lightweight_context: bool = True
+    
     # Identity
     soul_path: Optional[str] = None  # custom SOUL.md path (None = hermes default)
 
@@ -149,6 +153,7 @@ class KortexConfig:
             show_context_status=data.get("show_context_status", True),
             show_completion_markers=data.get("show_completion_markers", True),
             recent_resolution_window_days=data.get("recent_resolution_window_days", 7.0),
+            lightweight_context=data.get("lightweight_context", True),
             focus_topic=data.get("focus_topic"),
         )
 
