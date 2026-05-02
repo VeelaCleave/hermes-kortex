@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org)
-[![Schema v4](https://img.shields.io/badge/schema-v4-orange.svg)](kortex/db.py)
+[![Schema v5](https://img.shields.io/badge/schema-v5-orange.svg)](kortex/db.py)
 
 Experiential memory + lossless context for Hermes Agent.
 
@@ -14,6 +14,7 @@ KORTEX gives Hermes two different but complementary memory layers:
   - SOUL.md identity evolution
   - OCEAN personality trait modeling
   - semantic embeddings for vector-enhanced recall
+  - evidence traces linking facts to source episodes
 - **ContextEngine layer** for same-session lossless context
   - archives exact dropped spans at compression time
   - emits deterministic checkpoints instead of lossy collapse
@@ -39,10 +40,12 @@ KORTEX turns Hermes into a system with:
 - **Self-reflection** from successes, mistakes, and user style corrections
 - **SOUL.md-driven identity evolution**
 - **Linked memory graph traversal**
+- **Evidence traces** linking facts back to source episodes
 - **Lossless context compression** for same-session recall after Hermes compacts history
 - **Async dream-state maintenance** (DayDream + REMSleep)
 - **Semantic embeddings** for vector-enhanced recall
 - **Lightweight context injection** optimized for MOE models
+- **Database optimization** with vacuum, reindex, and compound indexes
 
 ---
 
@@ -141,6 +144,21 @@ Two-tier async memory optimization:
 - Provider-level content filters (`_filter_user_content`, `_filter_assistant_content`)
 - Fact deduplication using bigram Jaccard similarity
 - System noise exclusion patterns
+
+### Evidence Traces (V2)
+
+- `get_facts_by_episode()` — find all facts from a given episode
+- `get_evidence_for_fact()` — find the episode that birthed a fact
+- `get_fact_evidence_chain()` — join facts + episodes with full metadata
+- `get_evidence_summary()` — aggregate stats (total facts, episodes, orphans)
+- `get_orphaned_facts()` — find facts whose source episode vanished
+- Indexed `source_episode_id` for fast lookups
+
+### Database Optimization (V2)
+
+- `optimize_database()` — vacuum + reindex + analyze + compound indexes
+- `get_db_stats()` — table counts, file size, schema version
+- Compound indexes on: `(user_id, status, last_accessed)`, `(user_id, salience, timestamp)`, etc.
 
 ### Semantic Embeddings (V2)
 
@@ -502,7 +520,8 @@ KORTEX stores:
 | v1 | Initial schema: episodes, facts, loops, reflections, relationships, links |
 | v2 | Added lossless context tables, conversation summaries |
 | v3 | Added affect calibration tables, semantic embeddings |
-| v4 | Added OCEAN personality tables, refined affect schema |
+| v4 | Added OCEAN personality tables, refined affect |
+| v5 | Added evidence trace index, compound indexes, DB optimization methods |
 
 ---
 
@@ -513,13 +532,22 @@ cd hermes-kortex
 python3 -m pytest -q
 ```
 
-Current state: **494 tests** (all passing)
+Current state: **524 tests** (all passing)
 
 ---
 
 ## Version History
 
-### V2 (Current)
+### V2.1 (Current)
+
+New in V2.1:
+
+- **Evidence traces** — Link facts back to source episodes (`get_facts_by_episode`, `get_evidence_for_fact`, `get_fact_evidence_chain`, `get_evidence_summary`, `get_orphaned_facts`)
+- **Improved fact dedup** — Text normalization, trigram Jaccard, tuned thresholds
+- **Database optimization** — `optimize_database()`, `get_db_stats()`, compound indexes
+- **Schema v5** — Evidence trace index, compound indexes
+
+### V2
 
 New in V2:
 
