@@ -594,6 +594,54 @@ class Recall:
 
         return " ".join(parts)
 
+    @staticmethod
+    def _query_emotion_score(query: str) -> float:
+        """Estimate the emotional valence of a query string.
+
+        Returns a rough valence estimate from -1.0 (negative) to +1.0 (positive).
+        Used for affect-aware ranking: positive queries match positive memories.
+        """
+        if not query:
+            return 0.0
+
+        q = query.lower()
+        positive_words = {
+            "awesome", "great", "love", "excited", "happy", "amazing", "fantastic",
+            "brilliant", "perfect", "wonderful", "nice", "good", "best", "beautiful",
+            "shipped", "breakthrough", "finally", "celebrate", "win", "success",
+        }
+        negative_words = {
+            "frustrat", "annoy", "angr", "hate", "suck", "bug", "error", "fail",
+            "sigh", "ugh", "meh", "worried", "anxious", "confused", "tired",
+            "disappoint", "stuck", "slow", "glitch", "crash", "regret",
+        }
+
+        # Use substring matching for stems (e.g. "frustrat" matches "frustrating")
+        pos_count = 0
+        neg_count = 0
+        for word in q.split():
+            if word in positive_words:
+                pos_count += 1
+            elif word in negative_words:
+                neg_count += 1
+            else:
+                # Check if any negative stem is contained in the word
+                for stem in negative_words:
+                    if stem in word:
+                        neg_count += 1
+                        break
+                # Check if any positive stem is contained in the word
+                for stem in positive_words:
+                    if stem in word:
+                        pos_count += 1
+                        break
+
+        total = pos_count + neg_count
+        if total == 0:
+            return 0.0
+
+        return (pos_count - neg_count) / total
+
     def _rank_episode(
         self,
         ep: Episode,
@@ -646,7 +694,21 @@ class Recall:
             if overlap > 0:
                 relevance = min(0.5 + overlap * 0.15, 1.0)
 
-        return relevance * 0.3 + salience * 0.25 + recency * 0.25 + emotional * 0.2
+        # ── Affect-aware boost: align query emotion with episode emotion ──
+        # Positive queries match positive episodes, negative matches negative
+        emotion_boost = 0.0
+        if query:
+            query_valence = self._query_emotion_score(query)
+            ep_valence_norm = ep.valence / 2.0  # Normalize -2..+2 to -1..+1
+            # Same-sign emotions boost, opposite signs slightly penalize
+            if query_valence * ep_valence_norm > 0:
+                # Same polarity — boost proportional to alignment
+                emotion_boost = min(abs(query_valence) * abs(ep_valence_norm) * 0.3, 0.3)
+            elif query_valence * ep_valence_norm < 0:
+                # Opposite polarity — slight penalty
+                emotion_boost = -min(abs(query_valence) * abs(ep_valence_norm) * 0.15, 0.15)
+
+        return relevance * 0.3 + salience * 0.25 + recency * 0.25 + emotional * 0.2 + emotion_boost
 
     def _episode_strength(self, ep: Episode, now: float) -> float:
         last_access = ep.last_accessed_at or ep.timestamp
