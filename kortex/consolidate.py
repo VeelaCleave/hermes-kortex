@@ -114,16 +114,13 @@ class Consolidator:
             key_entities = latest_summary.get("key_entities", "")
 
         if not summary_text:
-            fallback = build_conversation_summary(
-                session_id,
-                session_episodes,
-                user_id=session_episodes[0].user_id
-                if session_episodes
-                else DEFAULT_USER_ID,
-            )
-            if fallback:
-                summary_text = fallback.get("summary_text", "").strip() or None
-                key_entities = fallback.get("key_entities", "")
+            # Fallback: build summary from raw user_text of episodes
+            texts = [ep.user_text for ep in session_episodes if ep.user_text]
+            if texts:
+                summary_text = " | ".join(t[:100] for t in texts[:3])
+            else:
+                summary_text = "Conversation summary unavailable"
+            key_entities = ""
 
         if not summary_text:
             summary_text = "Conversation summary unavailable"
