@@ -187,6 +187,8 @@ class KortexProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._agent_context: str = "primary"
         self._user_id: str = DEFAULT_USER_ID
+        self._daydream_active = False
+        self._daydream_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -439,6 +441,7 @@ class KortexProvider(MemoryProvider):
 
                 if self._consolidator:
                     self._consolidator.maybe_consolidate(user_id=self._user_id)
+                    self._trigger_daydream()
 
                 # ── OCEAN personality scoring ────────────────────────────
                 self._update_ocean(user_clean, assistant_clean)
@@ -484,6 +487,34 @@ class KortexProvider(MemoryProvider):
             )
         except Exception:
             logger.exception("KORTEX _update_ocean failed")
+
+    def _trigger_daydream(self) -> None:
+        """Trigger DayDream asynchronously after consolidation.
+
+        Runs in a daemon thread so it doesn't block the sync turn.
+        Only one DayDream can run at a time (simple lock).
+        """
+        if not self._db:
+            return
+
+        db_path = self._config.db_path or str(Path(self._hermes_home) / "kortex.db")
+
+        def _daydream_thread():
+            try:
+                from .dream import daydream as run_daydream
+                run_daydream(db_path)
+            except Exception:
+                logger.exception("KORTEX DayDream failed")
+            finally:
+                with self._daydream_lock:
+                    self._daydream_active = False
+
+        with self._daydream_lock:
+            if self._daydream_active:
+                return  # Already running, don't double-spawn
+            self._daydream_active = True
+
+        threading.Thread(target=_daydream_thread, daemon=True).start()
 
     def _make_ocean_score(self, data: Dict[str, Any]) -> Any:
         """Reconstruct an OCEANScore from DB row."""
