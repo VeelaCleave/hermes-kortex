@@ -375,7 +375,7 @@ class TestDBMigration:
 
     def test_schema_version(self, kortex_db):
         version = kortex_db._get_conn().execute("PRAGMA user_version").fetchone()[0]
-        assert version == 4
+        assert version == 5
 
 
 # ======================================================================== #

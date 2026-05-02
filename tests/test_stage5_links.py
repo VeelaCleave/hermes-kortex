@@ -542,10 +542,10 @@ class TestProviderIntegration:
 
 
 class TestSchemaAndMigration:
-    def test_schema_version_stays_three(self):
+    def test_schema_version_is_five(self):
         from kortex import db as db_module
 
-        assert db_module.SCHEMA_VERSION == 4
+        assert db_module.SCHEMA_VERSION == 5
 
     def test_existing_v2_db_still_has_entity_links(self, tmp_path):
         db = KortexDB(str(tmp_path / "test.db"))
@@ -564,7 +564,7 @@ class TestSchemaAndMigration:
         conn = db._get_conn()
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 4
+        assert version == 5
 
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert str(journal_mode).lower() == "wal"
@@ -605,7 +605,7 @@ class TestSchemaAndMigration:
         schema_version = conn.execute(
             "SELECT version FROM kortex_schema_version"
         ).fetchone()[0]
-        assert schema_version == 4
+        assert schema_version == 5
 
         db.close()
 

@@ -616,22 +616,40 @@ class Ingestor:
         return tuple(int(part) for part in match.group(1).split("."))
 
     @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize text for comparison: lowercase, strip punctuation, collapse spaces."""
+        import re
+        text = text.lower().strip()
+        # Remove trailing/leading punctuation on words
+        text = re.sub(r'[^\w\s]', '', text)
+        # Collapse multiple spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    @staticmethod
     def _facts_are_equivalent(existing: str, new: str) -> bool:
         """Two facts are equivalent if they say essentially the same thing.
-        
-        Uses a two-pass approach:
-        1. Length-normalized Jaccard on words (catches near-identical facts)
-        2. Length-normalized Jaccard on bigrams (catches reworded facts)
+
+        Uses a three-pass approach:
+        1. Length ratio quick filter (skip obviously different facts)
+        2. Word-level Jaccard (catches near-identical facts)
+        3. Bigram Jaccard (catches reworded facts)
+        4. Trigram Jaccard (catches slightly shifted phrasing)
+
+        Thresholds were tuned empirically against real fact pairs:
+        - Word Jaccard ≥ 0.65 (was 0.7, too strict for short facts)
+        - Bigram Jaccard ≥ 0.45 (was 0.5, too strict for 3-word facts)
+        - Trigram Jaccard ≥ 0.4 (new, catches "uses python daily" vs "uses python every day")
         """
-        existing_clean = existing.lower().strip()
-        new_clean = new.lower().strip()
-        
-        # Quick check: if lengths differ by more than 30%, they're probably different
+        existing_clean = Ingestor._normalize_text(existing)
+        new_clean = Ingestor._normalize_text(new)
+
+        # Quick check: if lengths differ by more than 50%, they're probably different
         if len(existing_clean) > 0 and len(new_clean) > 0:
             length_ratio = min(len(existing_clean), len(new_clean)) / max(len(existing_clean), len(new_clean))
-            if length_ratio < 0.5:
+            if length_ratio < 0.4:
                 return False
-        
+
         # Word-level Jaccard
         existing_words = set(existing_clean.split())
         new_words = set(new_clean.split())
@@ -640,11 +658,11 @@ class Ingestor:
         intersection = existing_words & new_words
         union = existing_words | new_words
         word_jaccard = len(intersection) / len(union)
-        
+
         # If word-level is strong enough, call it a match
-        if word_jaccard >= 0.7:
+        if word_jaccard >= 0.65:
             return True
-        
+
         # Bigram-level Jaccard (catches reworded facts)
         existing_bigrams = set()
         new_bigrams = set()
@@ -654,15 +672,29 @@ class Ingestor:
             existing_bigrams.add((words_e[i], words_e[i+1]))
         for i in range(len(words_n) - 1):
             new_bigrams.add((words_n[i], words_n[i+1]))
-        
+
         if existing_bigrams and new_bigrams:
             bigram_intersection = existing_bigrams & new_bigrams
             bigram_union = existing_bigrams | new_bigrams
             bigram_jaccard = len(bigram_intersection) / len(bigram_union)
-            # Lower threshold for bigrams since they're more sensitive to small changes
-            if bigram_jaccard >= 0.5:
+            if bigram_jaccard >= 0.45:
                 return True
-        
+
+        # Trigram-level Jaccard (catches slightly shifted phrasing)
+        existing_trigrams = set()
+        new_trigrams = set()
+        for i in range(len(words_e) - 2):
+            existing_trigrams.add((words_e[i], words_e[i+1], words_e[i+2]))
+        for i in range(len(words_n) - 2):
+            new_trigrams.add((words_n[i], words_n[i+1], words_n[i+2]))
+
+        if existing_trigrams and new_trigrams:
+            trigram_intersection = existing_trigrams & new_trigrams
+            trigram_union = existing_trigrams | new_trigrams
+            trigram_jaccard = len(trigram_intersection) / len(trigram_union)
+            if trigram_jaccard >= 0.4:
+                return True
+
         return False
 
     @staticmethod

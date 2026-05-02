@@ -13,7 +13,7 @@ def test_export_json_includes_metadata_and_iso_timestamps(kortex_db):
     kortex_db.insert_fact(Fact(object_text="uses neovim", predicate="uses"))
 
     exported = json.loads(export_to_json(kortex_db))
-    assert exported["metadata"]["kortex_schema_version"] == 4
+    assert exported["metadata"]["kortex_schema_version"] == 5
     assert "T" in exported["metadata"]["exported_at"]
     assert "T" in exported["episodes"][0]["timestamp"]
 

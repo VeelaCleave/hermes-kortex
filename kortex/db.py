@@ -31,7 +31,7 @@ from .time_utils import now_epoch, parse_timestamp
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "__default__"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # OCEAN personality schema (Big Five: Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
 _OCEAN_SCHEMA_SQL = """
@@ -128,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_facts_user ON facts(user_id);
 CREATE INDEX IF NOT EXISTS idx_facts_valid ON facts(valid_from, valid_to);
 CREATE INDEX IF NOT EXISTS idx_facts_contradiction ON facts(contradiction_status);
 CREATE INDEX IF NOT EXISTS idx_facts_accessed ON facts(last_accessed_at);
+CREATE INDEX IF NOT EXISTS idx_facts_source_episode ON facts(source_episode_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
     object_text, predicate,
@@ -538,6 +539,13 @@ class KortexDB:
         if from_version < 4:
             conn.executescript(_OCEAN_SCHEMA_SQL)
             from_version = 4
+
+        # v5: Evidence trace index on facts.source_episode_id
+        if from_version < 5:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_facts_source_episode ON facts(source_episode_id)"
+            )
+            from_version = 5
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._record_schema_version(conn)
@@ -1450,6 +1458,142 @@ class KortexDB:
                 (decay_rate, cutoff),
             )
             return cur.rowcount
+
+    # -- Evidence Traces ----------------------------------------------------
+
+    def get_facts_by_episode(
+        self, episode_id: int, user_id: str = DEFAULT_USER_ID
+    ) -> List[Fact]:
+        """Get all facts that originated from a specific episode."""
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM facts
+                   WHERE source_episode_id=? AND user_id=?
+                   ORDER BY confidence DESC""",
+                (episode_id, user_id),
+            )
+            .fetchall()
+        )
+        return [self._row_to_fact(r) for r in rows]
+
+    def get_evidence_for_fact(
+        self, fact_id: int
+    ) -> Optional[dict]:
+        """Get the evidence trail for a fact: which episode it came from,
+        with episode metadata (summary, valence, salience, topics)."""
+        row = (
+            self._get_conn()
+            .execute(
+                """SELECT f.id, f.predicate, f.object_text, f.confidence,
+                          f.source_episode_id, f.first_seen, f.last_seen, f.status,
+                          e.summary, e.valence, e.arousal, e.topics, e.entities,
+                          e.user_text, e.assistant_text, e.timestamp
+                   FROM facts f
+                   LEFT JOIN episodes e ON e.id = f.source_episode_id
+                   WHERE f.id=?""",
+                (fact_id,),
+            )
+            .fetchone()
+        )
+        if not row:
+            return None
+        return {
+            "fact_id": row[0],
+            "predicate": row[1],
+            "object_text": row[2],
+            "confidence": row[3],
+            "source_episode_id": row[4],
+            "first_seen": row[5],
+            "last_seen": row[6],
+            "status": row[7],
+            "episode_summary": row[8],
+            "episode_valence": row[9],
+            "episode_arousal": row[10],
+            "episode_topics": row[11],
+            "episode_entities": row[12],
+            "episode_user_text": row[13],
+            "episode_assistant_text": row[14],
+            "episode_timestamp": row[15],
+        }
+
+    def get_fact_evidence_chain(
+        self, fact_id: int
+    ) -> Optional[dict]:
+        """Get the full evidence chain for a fact: fact → episode → superseding facts.
+        Think of this as the 'provenance' of a fact."""
+        evidence = self.get_evidence_for_fact(fact_id)
+        if not evidence:
+            return None
+        # Get superseded facts (history leading to this fact)
+        superseded = self.get_facts_superseded_by(fact_id)
+        evidence["superseded_facts"] = [
+            {
+                "id": f.id,
+                "object_text": f.object_text,
+                "confidence": f.confidence,
+                "source_episode_id": f.source_episode_id,
+            }
+            for f in superseded
+        ]
+        return evidence
+
+    def get_evidence_summary(
+        self, user_id: str = DEFAULT_USER_ID, limit: int = 20
+    ) -> List[dict]:
+        """Get a summary of fact evidence: which facts come from which episodes,
+        with aggregate stats. Useful for debugging fact quality."""
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT f.source_episode_id AS eid,
+                         COUNT(*) AS fact_count,
+                         AVG(f.confidence) AS avg_confidence,
+                         MIN(f.confidence) AS min_confidence,
+                         MAX(f.confidence) AS max_confidence,
+                         GROUP_CONCAT(DISTINCT f.predicate) AS predicates
+                   FROM facts f
+                   WHERE f.user_id=? AND f.source_episode_id IS NOT NULL
+                   GROUP BY f.source_episode_id
+                   ORDER BY fact_count DESC, avg_confidence DESC
+                   LIMIT ?""",
+                (user_id, limit),
+            )
+            .fetchall()
+        )
+        results = []
+        for row in rows:
+            results.append({
+                "episode_id": row[0],
+                "fact_count": row[1],
+                "avg_confidence": round(row[2], 3) if row[2] else 0,
+                "min_confidence": round(row[3], 3) if row[3] else 0,
+                "max_confidence": round(row[4], 3) if row[4] else 0,
+                "predicates": row[5].split(",") if row[5] else [],
+            })
+        return results
+
+    def get_orphaned_facts(
+        self, user_id: str = DEFAULT_USER_ID
+    ) -> List[Fact]:
+        """Find facts that have a source_episode_id but the episode no longer exists.
+        Useful for cleanup."""
+        rows = (
+            self._get_conn()
+            .execute(
+                """SELECT * FROM facts f
+                   WHERE f.user_id=?
+                     AND f.source_episode_id IS NOT NULL
+                     AND f.source_episode_id > 0
+                     AND NOT EXISTS (
+                         SELECT 1 FROM episodes e WHERE e.id = f.source_episode_id
+                     )
+                   ORDER BY f.confidence DESC""",
+                (user_id,),
+            )
+            .fetchall()
+        )
+        return [self._row_to_fact(r) for r in rows]
 
     # -- Open Loops ----------------------------------------------------------
 
@@ -2659,3 +2803,89 @@ class KortexDB:
                 (entity_type, entity_id, user_id),
             )
             return cur.rowcount
+
+    # ── Database Optimization ──────────────────────────────────────────────
+
+    def optimize_database(self) -> Dict[str, Any]:
+        """Run full DB optimization: vacuum, reindex, analyze, and add compound indexes.
+        
+        Returns a summary dict of what was done.
+        """
+        result = {"vacuumed": False, "reindexed": False, "analyzed": False, "indexes_added": []}
+        conn = self._get_conn()
+        
+        # Add compound indexes for common query patterns
+        compound_indexes = [
+            # Facts: most common lookup pattern (user + status + last_accessed)
+            "CREATE INDEX IF NOT EXISTS idx_facts_user_status_accessed ON facts(user_id, status, last_accessed_at)",
+            # Facts: temporal decay queries (user + status + valid_to)
+            "CREATE INDEX IF NOT EXISTS idx_facts_user_status_decay ON facts(user_id, status, valid_to)",
+            # Episodes: user + salience + timestamp (for recent salient episodes)
+            "CREATE INDEX IF NOT EXISTS idx_episodes_user_salience_ts ON episodes(user_id, salience, timestamp)",
+            # Open loops: user + status + updated_at (for active loops)
+            "CREATE INDEX IF NOT EXISTS idx_loops_user_status_updated ON open_loops(user_id, status, updated_at)",
+            # Reflections: user + promotion_status + updated_at
+            "CREATE INDEX IF NOT EXISTS idx_reflections_user_promotion_updated ON reflections(user_id, promotion_status, updated_at)",
+        ]
+        
+        for idx_sql in compound_indexes:
+            try:
+                conn.execute(idx_sql)
+                result["indexes_added"].append(idx_sql.split("(")[0].split()[-1])
+            except Exception:
+                pass
+        
+        # VACUUM: recompacts the DB file
+        try:
+            conn.execute("VACUUM")
+            result["vacuumed"] = True
+        except Exception:
+            pass
+        
+        # REINDEX: rebuilds all B-tree indexes
+        try:
+            conn.execute("REINDEX")
+            result["reindexed"] = True
+        except Exception:
+            pass
+        
+        # ANALYZE: updates table statistics for query planner
+        try:
+            conn.execute("ANALYZE")
+            result["analyzed"] = True
+        except Exception:
+            conn.commit()
+        
+        return result
+
+    def get_db_stats(self) -> Dict[str, Any]:
+        """Get database statistics: row counts, file size, index usage."""
+        conn = self._get_conn()
+        
+        stats = {}
+        
+        # Table row counts
+        for table in ["episodes", "facts", "open_loops", "reflections", "entity_links", 
+                       "emotion_log", "conversation_summaries", "ocean_profiles"]:
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                stats[f"{table}_count"] = count
+            except Exception:
+                stats[f"{table}_count"] = 0
+        
+        # DB file size
+        try:
+            import os
+            db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+            if db_path and os.path.exists(db_path):
+                stats["db_file_size_bytes"] = os.path.getsize(db_path)
+        except Exception:
+            pass
+        
+        # Schema version
+        stats["schema_version"] = conn.execute("PRAGMA user_version").fetchone()[0]
+        
+        # Page count and free pages
+        stats["page_count"] = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]
+        
+        return stats
