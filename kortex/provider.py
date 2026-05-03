@@ -971,7 +971,7 @@ class KortexProvider(MemoryProvider):
                 },
                 "recent_emotional_state": {
                     "recent_emotions": [
-                        {"emotion": e.emotion, "intensity": e.intensity, "dominant_emotion": e.dominant_emotion}
+                        {"emotion": e.dominant_emotion, "intensity": e.arousal, "dominant_emotion": e.dominant_emotion}
                         for e in recent_emotions
                     ],
                     "baseline": {
