@@ -1809,6 +1809,9 @@ class KortexDB:
     def search_reflections(
         self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
     ) -> List[Reflection]:
+        normalized_query = self._normalize_fts_query(query)
+        if not normalized_query:
+            return []
         # Query FTS table directly, then join back to reflections for full data.
         rows = (
             self._get_conn()
@@ -1818,7 +1821,7 @@ class KortexDB:
                 WHERE reflections_fts MATCH ? AND r.user_id=?
                 ORDER BY rank
                 LIMIT ?""",
-                (query, user_id, limit),
+                (normalized_query, user_id, limit),
             )
             .fetchall()
         )

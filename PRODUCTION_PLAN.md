@@ -27,6 +27,7 @@ All critical fixes are complete. **602 tests passing**. The codebase has been st
 | `_build_episodes_section` missing arg | **Fixed**: added `episodes_budget` parameter |
 | Fresh DB missing `ocean_profiles` table | **Fixed**: `initialize()` now creates all schemas together |
 | 2 failing tests | **Fixed**: updated test assertions and JSON parse logic |
+| `search_reflections` FTS5 error on `?` | **Fixed**: now normalizes query before FTS5 lookup |
 
 ---
 
@@ -86,7 +87,8 @@ Context building works correctly for both users. Relationship text, facts, episo
 - **Graph linker**: entity linking across all memory types
 - **Lightweight mode**: now actually skips expensive operations
 - **Export/import**: now includes full memory graph
-- **Tool schemas**: properly declared for Hermes discovery
+- **Passive memory injection**: `pre_llm_call` hook automatically Injects context without tool calls — verified working with 1894+ char responses
+- **Tool schemas**: properly declared for Hermes discovery (3 tools: kortex_query, kortex_recall, kortex_expand)
 
 ---
 
