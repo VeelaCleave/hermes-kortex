@@ -145,65 +145,30 @@ class KortexProvider(MemoryProvider):
         """Filter out system prompts, tool outputs, and other non-conversation content."""
         if not content:
             return ("", True)
-        
         system_patterns = [
-            "[System note:",
-            "[memory-context]",
-            "Recalled memories:",
-            "Open threads:",
-            "Learned behaviors:",
-            "Known facts:",
+            "[System note:", "[memory-context]", "Recalled memories:",
+            "Open threads:", "Learned behaviors:", "Known facts:",
             "What general pattern of task did the user just complete",
-            "Review the conversation above",
-            "Consider whether a skill should be saved",
-            "check my work over at",
-            "make sure it's working as intended",
-            "maybe you could try out",
-            "you can then deep dive",
-            "figure out what's not working",
-            "what's over-engineered",
-            "what's missing",
+            "Review the conversation above", "Consider whether a skill should be saved",
+            "check my work over at", "make sure it's working as intended",
+            "maybe you could try out", "you can then deep dive",
+            "figure out what's not working", "what's over-engineered", "what's missing",
         ]
-        
-        for pattern in system_patterns:
-            if pattern.lower() in content.lower():
-                lines = content.split("\n")
-                real_lines = []
-                for line in lines:
-                    skip = False
-                    for p in system_patterns:
-                        if p.lower() in line.lower():
-                            skip = True
-                            break
-                    if not skip:
-                        real_lines.append(line)
-                
-                cleaned = "\n".join(real_lines).strip()
-                if cleaned:
-                    return (cleaned, False)
-                return ("", True)
-        
-        return (content, False)
+        real_lines = [line for line in content.split("\n")
+                      if not any(p.lower() in line.lower() for p in system_patterns)]
+        cleaned = "\n".join(real_lines).strip()
+        if cleaned:
+            return (cleaned, False)
+        return ("", True)
     
     def _filter_assistant_content(self, content: str) -> str:
         """Filter out tool outputs and system noise from assistant responses."""
         if not content:
             return content
-        
-        lines = content.split("\n")
-        clean_lines = []
-        
-        for line in lines:
-            if any(pattern in line for pattern in [
-                "EXIT_CODE", "EXIT: 124", "EXIT: 0",
-                "passed in", "failed in",
-                "KORTEX Memory", "KORTEX initialized",
-                "PRAGMA", "sqlite3",
-            ]):
-                continue
-            clean_lines.append(line)
-        
-        return "\n".join(clean_lines)
+        skip_patterns = ["EXIT_CODE", "EXIT: 124", "EXIT: 0", "passed in", "failed in",
+                         "KORTEX Memory", "KORTEX initialized", "PRAGMA", "sqlite3"]
+        return "\n".join(line for line in content.split("\n")
+                          if not any(p in line for p in skip_patterns))
     
     def sync_turn(
         self, user_content: str, assistant_content: str, *, session_id: str = ""
