@@ -329,6 +329,10 @@ class KortexProvider(MemoryProvider):
             turn_count=existing.turn_count,
         )
 
+    def _daydream_deactivate(self) -> None:
+        with self._daydream_lock:
+            self._daydream_active = False
+
     def _trigger_daydream(self) -> None:
         """Trigger DayDream asynchronously after consolidation.
         Runs in a daemon thread so it doesn't block the sync turn.
@@ -350,13 +354,10 @@ class KortexProvider(MemoryProvider):
             if not self._daydream_active:
                 self._daydream_active = True
                 threading.Thread(target=_dream, daemon=True).start()
-
-        # Reset the flag after a short delay
-        def _reset_flag():
-            time.sleep(5)
-            with self._daydream_lock:
-                self._daydream_active = False
-        threading.Thread(target=_reset_flag, daemon=True).start()
+                # Reset the flag after a short delay using a Timer
+                timer = threading.Timer(5.0, self._daydream_deactivate)
+                timer.daemon = True
+                timer.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return []
