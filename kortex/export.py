@@ -9,6 +9,10 @@ from .db import DEFAULT_USER_ID, SCHEMA_VERSION, KortexDB
 from .models import Episode, Fact, OpenLoop, Reflection
 from .time_utils import epoch_to_iso, now_epoch, parse_timestamp
 
+
+def _iso_or_none(value):
+    return epoch_to_iso(value) if value else None
+
 _DEFAULT_MEMORY_TYPES = {
     "episodes",
     "facts",
@@ -35,11 +39,11 @@ def export_to_json(
         "metadata": {
             "kortex_schema_version": SCHEMA_VERSION,
             "db_user_version": _db_user_version(db),
-            "exported_at": epoch_to_iso(now_epoch()),
+            "exported_at": _iso_or_none(now_epoch()),
             "user_id": user_id,
             "filters": {
-                "start": epoch_to_iso(start_ts) if start_ts is not None else None,
-                "end": epoch_to_iso(end_ts) if end_ts is not None else None,
+                "start": _iso_or_none(start_ts) if start_ts is not None else None,
+                "end": _iso_or_none(end_ts) if end_ts is not None else None,
                 "types": sorted(type_filter),
             },
         }
@@ -264,7 +268,7 @@ def _episode_to_dict(ep: Episode) -> Dict[str, Any]:
         "topics": ep.topics,
         "entities": ep.entities,
         "is_consolidated": ep.is_consolidated,
-        "last_accessed_at": epoch_to_iso(ep.last_accessed_at)
+        "last_accessed_at": _iso_or_none(ep.last_accessed_at)
         if ep.last_accessed_at
         else None,
         "retrieval_count": ep.retrieval_count,
@@ -283,16 +287,16 @@ def _fact_to_dict(fact: Fact) -> Dict[str, Any]:
         "object_text": fact.object_text,
         "confidence": fact.confidence,
         "source_episode_id": fact.source_episode_id,
-        "first_seen": epoch_to_iso(fact.first_seen),
-        "last_seen": epoch_to_iso(fact.last_seen),
+        "first_seen": _iso_or_none(fact.first_seen),
+        "last_seen": _iso_or_none(fact.last_seen),
         "status": fact.status,
         "superseded_by": fact.superseded_by,
-        "last_accessed_at": epoch_to_iso(fact.last_accessed_at)
+        "last_accessed_at": _iso_or_none(fact.last_accessed_at)
         if fact.last_accessed_at
         else None,
         "retrieval_count": fact.retrieval_count,
-        "valid_from": epoch_to_iso(fact.valid_from) if fact.valid_from else None,
-        "valid_to": epoch_to_iso(fact.valid_to) if fact.valid_to else None,
+        "valid_from": _iso_or_none(fact.valid_from) if fact.valid_from else None,
+        "valid_to": _iso_or_none(fact.valid_to) if fact.valid_to else None,
         "contradiction_status": fact.contradiction_status,
     }
 
@@ -306,9 +310,9 @@ def _loop_to_dict(loop: OpenLoop) -> Dict[str, Any]:
         "due_hint": loop.due_hint,
         "status": loop.status,
         "source_episode_id": loop.source_episode_id,
-        "created_at": epoch_to_iso(loop.created_at),
-        "resolved_at": epoch_to_iso(loop.resolved_at) if loop.resolved_at else None,
-        "last_accessed_at": epoch_to_iso(loop.last_accessed_at)
+        "created_at": _iso_or_none(loop.created_at),
+        "resolved_at": _iso_or_none(loop.resolved_at) if loop.resolved_at else None,
+        "last_accessed_at": _iso_or_none(loop.last_accessed_at)
         if loop.last_accessed_at
         else None,
         "resolution": loop.resolution,
@@ -324,15 +328,15 @@ def _reflection_to_dict(reflection: Reflection) -> Dict[str, Any]:
         "text": reflection.text,
         "confidence": reflection.confidence,
         "source_episode_id": reflection.source_episode_id,
-        "created_at": epoch_to_iso(reflection.created_at),
-        "last_reinforced": epoch_to_iso(reflection.last_reinforced),
+        "created_at": _iso_or_none(reflection.created_at),
+        "last_reinforced": _iso_or_none(reflection.last_reinforced),
         "reinforcement_count": reflection.reinforcement_count,
-        "last_accessed_at": epoch_to_iso(reflection.last_accessed_at)
+        "last_accessed_at": _iso_or_none(reflection.last_accessed_at)
         if reflection.last_accessed_at
         else None,
         "retrieval_count": reflection.retrieval_count,
         "promotion_status": reflection.promotion_status,
-        "promoted_at": epoch_to_iso(reflection.promoted_at)
+        "promoted_at": _iso_or_none(reflection.promoted_at)
         if reflection.promoted_at
         else None,
     }
@@ -345,18 +349,18 @@ def _summary_to_dict(summary: Dict[str, Any]) -> Dict[str, Any]:
         "session_id": summary.get("session_id", ""),
         "summary_text": summary.get("summary_text", ""),
         "summary_level": summary.get("summary_level", "conversation"),
-        "episode_range_start": epoch_to_iso(summary["episode_range_start"])
+        "episode_range_start": _iso_or_none(summary["episode_range_start"])
         if summary.get("episode_range_start")
         else None,
-        "episode_range_end": epoch_to_iso(summary["episode_range_end"])
+        "episode_range_end": _iso_or_none(summary["episode_range_end"])
         if summary.get("episode_range_end")
         else None,
         "episode_count": summary.get("episode_count", 0),
         "key_entities": summary.get("key_entities", ""),
-        "created_at": epoch_to_iso(summary["created_at"])
+        "created_at": _iso_or_none(summary["created_at"])
         if summary.get("created_at")
         else None,
-        "updated_at": epoch_to_iso(summary["updated_at"])
+        "updated_at": _iso_or_none(summary["updated_at"])
         if summary.get("updated_at")
         else None,
     }
@@ -369,6 +373,6 @@ def _identity_delta_to_dict(delta: Any) -> Dict[str, Any]:
         "text": delta.text,
         "confidence": delta.confidence,
         "source_episode_id": delta.source_episode_id,
-        "created_at": epoch_to_iso(delta.created_at),
+        "created_at": _iso_or_none(delta.created_at),
         "applied": delta.applied,
     }
