@@ -17,7 +17,7 @@ import math
 from typing import Optional
 
 from .models import AffectSignal, RelationshipState
-from .time_utils import now_epoch
+from .time_utils import now_epoch, _clamp, _ema
 
 
 # How quickly each dimension responds to new signals (0 = inert, 1 = instant)
@@ -44,15 +44,6 @@ _BASELINES = {
 
 # Regression rate per day of inactivity (how fast we drift toward baseline)
 _REGRESSION_RATE = 0.02
-
-
-def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, value))
-
-
-def _ema(current: float, target: float, alpha: float) -> float:
-    """Exponential moving average step."""
-    return (1 - alpha) * current + alpha * target
 
 
 def compute_relationship_delta(

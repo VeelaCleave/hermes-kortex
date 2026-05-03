@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .models import AffectSignal
-from .time_utils import now_epoch
+from .time_utils import now_epoch, _ema
 
 
 @dataclass
@@ -108,5 +108,3 @@ def calibrate_affect(
     )
 
 
-def _ema(current: float, new: float, alpha: float) -> float:
-    return current + alpha * (new - current)

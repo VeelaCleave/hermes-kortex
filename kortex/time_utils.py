@@ -57,3 +57,13 @@ def epoch_to_iso(ts: float) -> str:
 def epoch_to_display(ts: float) -> str:
     """Human-readable UTC timestamp for tools and memory rendering."""
     return epoch_to_datetime(ts).strftime("%a %b %d, %H:%M UTC")
+
+
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    """Clamp a value to a range."""
+    return max(low, min(high, value))
+
+
+def _ema(current: float, target: float, alpha: float) -> float:
+    """Exponential moving average step."""
+    return (1 - alpha) * current + alpha * target
