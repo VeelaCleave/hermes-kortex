@@ -201,6 +201,16 @@ _FACT_STOPWORDS = frozenset(
 _SIMILARITY_THRESHOLD = 0.5
 
 
+def _extract_keywords(text: str, stopwords: frozenset) -> set[str]:
+    """Extract significant keywords from text, filtering short words and stopwords."""
+    return {
+        w.strip(".,!?;:'\"()[]")
+        for w in text.lower().split()
+        if len(w.strip(".,!?;:'\"()[]")) > 3
+        and w.strip(".,!?;:'\"()[]") not in stopwords
+    }
+
+
 class Ingestor:
     """Processes turns into structured episodes with heuristic metadata extraction."""
 
@@ -388,26 +398,10 @@ class Ingestor:
             if loop.kind != "question":
                 continue
 
-            loop_keywords = set(
-                w.strip(".,!?;:'\"()[]")
-                for w in loop.text.lower().split()
-                if len(w.strip(".,!?;:'\"()[]")) > 3
-                and w.strip(".,!?;:'\"()[]")
-                not in {
-                    "what",
-                    "when",
-                    "where",
-                    "which",
-                    "would",
-                    "could",
-                    "should",
-                    "will",
-                    "that",
-                    "this",
-                    "have",
-                    "does",
-                    "with",
-                }
+            loop_keywords = _extract_keywords(
+                loop.text,
+                frozenset({"what", "when", "where", "which", "would", "could",
+                           "should", "will", "that", "this", "have", "does", "with"}),
             )
 
             if not loop_keywords:
@@ -447,23 +441,10 @@ class Ingestor:
             if loop.kind != "commitment":
                 continue
 
-            loop_keywords = set(
-                w.strip(".,!?;:'\"()[]")
-                for w in loop.text.lower().split()
-                if len(w.strip(".,!?;:'\"()[]")) > 3
-                and w.strip(".,!?;:'\"()[]")
-                not in {
-                    "will",
-                    "going",
-                    "should",
-                    "would",
-                    "promise",
-                    "make",
-                    "sure",
-                    "that",
-                    "this",
-                    "with",
-                }
+            loop_keywords = _extract_keywords(
+                loop.text,
+                frozenset({"will", "going", "should", "would", "promise",
+                           "make", "sure", "that", "this", "with"}),
             )
 
             if not loop_keywords:
