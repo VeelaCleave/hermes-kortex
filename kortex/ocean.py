@@ -108,6 +108,20 @@ class OCEANScore:
             "turn_count": self.turn_count,
         }
 
+    @classmethod
+    def from_db_row(cls, row: dict) -> "OCEANScore":
+        return cls(
+            openness=row["openness"],
+            conscientiousness=row["conscientiousness"],
+            extraversion=row["extraversion"],
+            agreeableness=row["agreeableness"],
+            neuroticism=row["neuroticism"],
+            confidence=row["confidence"],
+            turn_count=row["turn_count"],
+            last_updated=row["updated_at"],
+            user_id=row["user_id"],
+        )
+
     def to_compact_text(self) -> str:
         lines = [f"OCEAN personality profile ({self.turn_count} turns, confidence={self.confidence:.2f}):"]
         labels = {
