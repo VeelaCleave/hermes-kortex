@@ -181,22 +181,38 @@ def dream(db_path: str, max_age_days: int = 7):
     return daydream(db_path, max_age_days=max_age_days)
 
 
+def _audit_evidence(db_path: str, fact_id: int | None = None) -> dict:
+    """Run evidence trace audit: orphaned facts, evidence summary, optional fact chain."""
+    db = KortexDB(db_path)
+    results = {}
+    results["orphaned_facts"] = db.get_orphaned_facts()
+    results["evidence_summary"] = db.get_evidence_summary(limit=50)
+    if fact_id:
+        chain = db.get_fact_evidence_chain(fact_id)
+        results["fact_chain"] = chain if chain else {"error": f"fact_id {fact_id} not found"}
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kortex Dream State")
     parser.add_argument(
         "mode",
-        choices=["daydream", "rem"],
-        help="Dream mode: 'daydream' (quick) or 'rem' (deep)"
+        choices=["daydream", "rem", "audit-evidence"],
+        help="Dream mode: 'daydream' (quick), 'rem' (deep), or 'audit-evidence' (fact evidence)"
     )
     parser.add_argument("--db", default=os.path.expanduser("~/.hermes/kortex.db"))
     parser.add_argument("--max-age-days", type=int, default=7)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--fact-id", type=int, default=None,
+                        help="Fact ID for evidence chain lookup (audit-evidence mode)")
     args = parser.parse_args()
 
     if args.mode == "daydream":
         result = daydream(args.db, max_age_days=args.max_age_days)
-    else:
+    elif args.mode == "rem":
         result = rem_sleep(args.db, max_age_days=args.max_age_days)
+    else:
+        result = _audit_evidence(args.db, fact_id=args.fact_id)
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
