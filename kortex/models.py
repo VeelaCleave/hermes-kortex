@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from .time_utils import epoch_to_display, epoch_to_iso, now_epoch
+from .time_utils import epoch_to_display, epoch_to_iso, now_epoch, parse_timestamp
 
 
 class Valence(Enum):
@@ -87,6 +87,29 @@ class Episode:
         text = f"[{time_anchor}{valence_label}] {self.summary}"
         return text
 
+    @classmethod
+    def from_db_row(cls, row: dict) -> "Episode":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            session_id=row["session_id"],
+            turn_index=row["turn_index"],
+            timestamp=parse_timestamp(row["timestamp"]) or 0.0,
+            user_text=row["user_text"],
+            assistant_text=row["assistant_text"],
+            summary=row["summary"],
+            salience=row["salience"],
+            valence=row["valence"],
+            arousal=row["arousal"],
+            topics=row["topics"],
+            entities=row["entities"],
+            is_consolidated=bool(row["is_consolidated"]),
+            last_accessed_at=parse_timestamp(row["last_accessed_at"]),
+            retrieval_count=row["retrieval_count"],
+            consolidated_into=row["consolidated_into"],
+            raw_preserved=bool(row["raw_preserved"]),
+        )
+
 
 @dataclass
 class Fact:
@@ -110,6 +133,28 @@ class Fact:
     valid_to: Optional[float] = None
     contradiction_status: str = "active"
 
+    @classmethod
+    def from_db_row(cls, row: dict) -> "Fact":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            subject_type=row["subject_type"],
+            subject_id=row["subject_id"],
+            predicate=row["predicate"],
+            object_text=row["object_text"],
+            confidence=row["confidence"],
+            source_episode_id=row["source_episode_id"],
+            first_seen=parse_timestamp(row["first_seen"]) or 0.0,
+            last_seen=parse_timestamp(row["last_seen"]) or 0.0,
+            status=row["status"],
+            superseded_by=row["superseded_by"],
+            last_accessed_at=parse_timestamp(row["last_accessed_at"]),
+            retrieval_count=row["retrieval_count"],
+            valid_from=parse_timestamp(row["valid_from"]),
+            valid_to=parse_timestamp(row["valid_to"]),
+            contradiction_status=row["contradiction_status"],
+        )
+
 
 @dataclass
 class OpenLoop:
@@ -127,6 +172,23 @@ class OpenLoop:
     last_accessed_at: Optional[float] = None
     resolution: str = ""
     resolved_by_episode_id: Optional[int] = None
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "OpenLoop":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            kind=row["kind"],
+            text=row["text"],
+            due_hint=row["due_hint"],
+            status=row["status"],
+            source_episode_id=row["source_episode_id"],
+            created_at=parse_timestamp(row["created_at"]) or 0.0,
+            resolved_at=parse_timestamp(row["resolved_at"]),
+            last_accessed_at=parse_timestamp(row["last_accessed_at"]),
+            resolution=row["resolution"],
+            resolved_by_episode_id=row["resolved_by_episode_id"],
+        )
 
 
 @dataclass
@@ -146,6 +208,24 @@ class Reflection:
     retrieval_count: int = 0
     promotion_status: str = "active"
     promoted_at: Optional[float] = None
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "Reflection":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            kind=row["kind"],
+            text=row["text"],
+            confidence=row["confidence"],
+            source_episode_id=row["source_episode_id"],
+            created_at=parse_timestamp(row["created_at"]) or 0.0,
+            last_reinforced=parse_timestamp(row["last_reinforced"]) or 0.0,
+            reinforcement_count=row["reinforcement_count"],
+            last_accessed_at=parse_timestamp(row["last_accessed_at"]),
+            retrieval_count=row["retrieval_count"],
+            promotion_status=row["promotion_status"],
+            promoted_at=parse_timestamp(row["promoted_at"]),
+        )
 
 
 @dataclass
@@ -189,6 +269,22 @@ class RelationshipState:
 
         return (
             f"Relationship: {', '.join(descriptors)} ({self.total_turns} interactions)"
+        )
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "RelationshipState":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            warmth=row["warmth"],
+            trust=row["trust"],
+            tension=row["tension"],
+            familiarity=row["familiarity"],
+            humor=row["humor"],
+            formality=row["formality"],
+            volatility=row["volatility"],
+            last_updated=parse_timestamp(row["last_updated"]) or 0.0,
+            total_turns=row["total_turns"],
         )
 
 
@@ -271,6 +367,18 @@ class IdentityDelta:
     source_episode_id: Optional[int] = None
     created_at: float = field(default_factory=now_epoch)
     applied: bool = False
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "IdentityDelta":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            text=row["text"],
+            confidence=row["confidence"],
+            source_episode_id=row["source_episode_id"],
+            created_at=parse_timestamp(row["created_at"]) or 0.0,
+            applied=bool(row["applied"]),
+        )
 
 
 @dataclass

@@ -1009,7 +1009,7 @@ class KortexDB:
         )
         if row:
             self.touch_episode(episode_id)
-        return self._row_to_episode(row) if row else None
+        return Episode.from_db_row(dict(row)) if row else None
 
     def get_recent_episodes(
         self,
@@ -1037,7 +1037,7 @@ class KortexDB:
             .fetchall()
         )
         self.touch_episodes([row["id"] for row in rows])
-        return [self._row_to_episode(r) for r in rows]
+        return [Episode.from_db_row(dict(r)) for r in rows]
 
     def search_episodes(
         self,
@@ -1069,7 +1069,7 @@ class KortexDB:
             .fetchall()
         )
         self.touch_episodes([row["id"] for row in rows])
-        return [self._row_to_episode(r) for r in rows]
+        return [Episode.from_db_row(dict(r)) for r in rows]
 
     def get_salient_episodes(
         self,
@@ -1092,7 +1092,7 @@ class KortexDB:
             .fetchall()
         )
         self.touch_episodes([row["id"] for row in rows])
-        return [self._row_to_episode(r) for r in rows]
+        return [Episode.from_db_row(dict(r)) for r in rows]
 
     def count_episodes(self, user_id: str = DEFAULT_USER_ID) -> int:
         return (
@@ -1126,7 +1126,7 @@ class KortexDB:
             params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
         self.touch_episodes([row["id"] for row in rows])
-        return [self._row_to_episode(r) for r in rows]
+        return [Episode.from_db_row(dict(r)) for r in rows]
 
     def touch_episode(self, episode_id: int) -> None:
         self.touch_episodes([episode_id])
@@ -1172,7 +1172,7 @@ class KortexDB:
         query += " ORDER BY timestamp ASC LIMIT ?"
         params.append(limit)
         rows = self._get_conn().execute(query, tuple(params)).fetchall()
-        return [self._row_to_episode(r) for r in rows]
+        return [Episode.from_db_row(dict(r)) for r in rows]
 
     def mark_episodes_consolidated(
         self, episode_ids: List[int], summary_episode_id: int
@@ -1312,7 +1312,7 @@ class KortexDB:
                 )
                 .fetchall()
             )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     def get_fact(self, fact_id: int) -> Optional[Fact]:
         row = (
@@ -1320,7 +1320,7 @@ class KortexDB:
             .execute("SELECT * FROM facts WHERE id=?", (fact_id,))
             .fetchone()
         )
-        return self._row_to_fact(row) if row else None
+        return Fact.from_db_row(dict(row)) if row else None
 
     def get_facts_superseded_by(self, new_fact_id: int, limit: int = 20) -> List[Fact]:
         rows = (
@@ -1331,7 +1331,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     def search_facts(
         self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
@@ -1352,7 +1352,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     def update_fact_confidence(self, fact_id: int, confidence: float) -> None:
         now = now_epoch()
@@ -1399,7 +1399,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     def find_similar_facts(
         self,
@@ -1437,7 +1437,7 @@ class KortexDB:
                     )
                     .fetchall()
                 )
-            return [self._row_to_fact(r) for r in rows]
+            return [Fact.from_db_row(dict(r)) for r in rows]
         except sqlite3.OperationalError:
             return []
 
@@ -1488,7 +1488,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     def get_evidence_for_fact(
         self, fact_id: int
@@ -1606,7 +1606,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_fact(r) for r in rows]
+        return [Fact.from_db_row(dict(r)) for r in rows]
 
     # -- Open Loops ----------------------------------------------------------
 
@@ -1645,7 +1645,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_open_loop(r) for r in rows]
+        return [OpenLoop.from_db_row(dict(r)) for r in rows]
 
     def resolve_loop(
         self,
@@ -1690,7 +1690,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_open_loop(r) for r in rows]
+        return [OpenLoop.from_db_row(dict(r)) for r in rows]
 
     def get_recently_resolved_loops(
         self, days_window: float = 7.0, limit: int = 5, user_id: str = DEFAULT_USER_ID
@@ -1707,7 +1707,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_open_loop(r) for r in rows]
+        return [OpenLoop.from_db_row(dict(r)) for r in rows]
 
     def get_stale_open_loops(
         self, days_threshold: float = 14.0, limit: int = 10, user_id: str = DEFAULT_USER_ID
@@ -1724,7 +1724,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_open_loop(r) for r in rows]
+        return [OpenLoop.from_db_row(dict(r)) for r in rows]
 
     def get_active_open_loops(
         self, days_threshold: float = 14.0, limit: int = 10, user_id: str = DEFAULT_USER_ID
@@ -1741,7 +1741,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_open_loop(r) for r in rows]
+        return [OpenLoop.from_db_row(dict(r)) for r in rows]
 
     # -- Reflections ---------------------------------------------------------
 
@@ -1795,7 +1795,7 @@ class KortexDB:
                 )
                 .fetchall()
             )
-        return [self._row_to_reflection(r) for r in rows]
+        return [Reflection.from_db_row(dict(r)) for r in rows]
 
     def get_reflection(self, reflection_id: int) -> Optional[Reflection]:
         row = (
@@ -1803,7 +1803,7 @@ class KortexDB:
             .execute("SELECT * FROM reflections WHERE id=?", (reflection_id,))
             .fetchone()
         )
-        return self._row_to_reflection(row) if row else None
+        return Reflection.from_db_row(dict(row)) if row else None
 
     def search_reflections(
         self, query: str, limit: int = 10, user_id: str = DEFAULT_USER_ID
@@ -1821,7 +1821,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_reflection(r) for r in rows]
+        return [Reflection.from_db_row(dict(r)) for r in rows]
 
     def reinforce_reflection(
         self, reflection_id: int, confidence_boost: float = 0.1
@@ -1851,7 +1851,7 @@ class KortexDB:
             )
             .fetchall()
         )
-        return [self._row_to_reflection(r) for r in rows]
+        return [Reflection.from_db_row(dict(r)) for r in rows]
 
     def decay_stale_reflections(
         self, days_threshold: float = 30.0, decay_rate: float = 0.05
@@ -1887,7 +1887,7 @@ class KortexDB:
                 )
                 .fetchall()
             )
-        return [self._row_to_identity_delta(r) for r in rows]
+        return [IdentityDelta.from_db_row(dict(r)) for r in rows]
 
     def get_identity_delta_by_id(self, delta_id: int) -> Optional[IdentityDelta]:
         row = (
@@ -1895,7 +1895,7 @@ class KortexDB:
             .execute("SELECT * FROM identity_deltas WHERE id=?", (delta_id,))
             .fetchone()
         )
-        return self._row_to_identity_delta(row) if row else None
+        return IdentityDelta.from_db_row(dict(row)) if row else None
 
     # -- Relationship State --------------------------------------------------
 
@@ -1906,7 +1906,7 @@ class KortexDB:
             .fetchone()
         )
         if row:
-            return self._row_to_relationship(row)
+            return RelationshipState.from_db_row(dict(row))
         return RelationshipState(user_id=user_id)
 
     def upsert_relationship(self, rs: RelationshipState) -> None:
@@ -2151,7 +2151,7 @@ class KortexDB:
                 )
                 .fetchall()
             )
-        return [self._row_to_affect_signal(r) for r in rows]
+        return [AffectSignal.from_db_row(dict(r)) for r in rows]
 
     def get_emotion_for_episode(self, episode_id: int) -> Optional[AffectSignal]:
         row = (
@@ -2159,7 +2159,7 @@ class KortexDB:
             .execute("SELECT * FROM emotion_log WHERE episode_id=?", (episode_id,))
             .fetchone()
         )
-        return self._row_to_affect_signal(row) if row else None
+        return AffectSignal.from_db_row(dict(row)) if row else None
 
     def get_emotional_trajectory(
         self,
@@ -2259,133 +2259,6 @@ class KortexDB:
                     baseline.updated_at,
                 ),
             )
-
-    # -- Row mappers ---------------------------------------------------------
-
-    @staticmethod
-    def _row_to_episode(row: sqlite3.Row) -> Episode:
-        return Episode(
-            id=row["id"],
-            user_id=row["user_id"],
-            session_id=row["session_id"],
-            turn_index=row["turn_index"],
-            timestamp=_as_epoch(row["timestamp"]) or 0.0,
-            user_text=row["user_text"],
-            assistant_text=row["assistant_text"],
-            summary=row["summary"],
-            salience=row["salience"],
-            valence=row["valence"],
-            arousal=row["arousal"],
-            topics=row["topics"],
-            entities=row["entities"],
-            is_consolidated=bool(row["is_consolidated"]),
-            last_accessed_at=_as_epoch(row["last_accessed_at"]),
-            retrieval_count=row["retrieval_count"],
-            consolidated_into=row["consolidated_into"],
-            raw_preserved=bool(row["raw_preserved"]),
-        )
-
-    @staticmethod
-    def _row_to_fact(row: sqlite3.Row) -> Fact:
-        return Fact(
-            id=row["id"],
-            user_id=row["user_id"],
-            subject_type=row["subject_type"],
-            subject_id=row["subject_id"],
-            predicate=row["predicate"],
-            object_text=row["object_text"],
-            confidence=row["confidence"],
-            source_episode_id=row["source_episode_id"],
-            first_seen=_as_epoch(row["first_seen"]) or 0.0,
-            last_seen=_as_epoch(row["last_seen"]) or 0.0,
-            status=row["status"],
-            superseded_by=row["superseded_by"],
-            last_accessed_at=_as_epoch(row["last_accessed_at"]),
-            retrieval_count=row["retrieval_count"],
-            valid_from=_as_epoch(row["valid_from"]),
-            valid_to=_as_epoch(row["valid_to"]),
-            contradiction_status=row["contradiction_status"],
-        )
-
-    @staticmethod
-    def _row_to_open_loop(row: sqlite3.Row) -> OpenLoop:
-        return OpenLoop(
-            id=row["id"],
-            user_id=row["user_id"],
-            kind=row["kind"],
-            text=row["text"],
-            due_hint=row["due_hint"],
-            status=row["status"],
-            source_episode_id=row["source_episode_id"],
-            created_at=_as_epoch(row["created_at"]) or 0.0,
-            resolved_at=_as_epoch(row["resolved_at"]),
-            last_accessed_at=_as_epoch(row["last_accessed_at"]),
-            resolution=row["resolution"],
-            resolved_by_episode_id=row["resolved_by_episode_id"],
-        )
-
-    @staticmethod
-    def _row_to_reflection(row: sqlite3.Row) -> Reflection:
-        return Reflection(
-            id=row["id"],
-            user_id=row["user_id"],
-            kind=row["kind"],
-            text=row["text"],
-            confidence=row["confidence"],
-            source_episode_id=row["source_episode_id"],
-            created_at=_as_epoch(row["created_at"]) or 0.0,
-            last_reinforced=_as_epoch(row["last_reinforced"]) or 0.0,
-            reinforcement_count=row["reinforcement_count"],
-            last_accessed_at=_as_epoch(row["last_accessed_at"]),
-            retrieval_count=row["retrieval_count"],
-            promotion_status=row["promotion_status"],
-            promoted_at=_as_epoch(row["promoted_at"]),
-        )
-
-    @staticmethod
-    def _row_to_relationship(row: sqlite3.Row) -> RelationshipState:
-        return RelationshipState(
-            id=row["id"],
-            user_id=row["user_id"],
-            warmth=row["warmth"],
-            trust=row["trust"],
-            tension=row["tension"],
-            familiarity=row["familiarity"],
-            humor=row["humor"],
-            formality=row["formality"],
-            volatility=row["volatility"],
-            last_updated=_as_epoch(row["last_updated"]) or 0.0,
-            total_turns=row["total_turns"],
-        )
-
-    @staticmethod
-    def _row_to_affect_signal(row: sqlite3.Row) -> AffectSignal:
-        return AffectSignal(
-            frustration=row["frustration"],
-            warmth=row["warmth"],
-            humor=row["humor"],
-            hostility=row["hostility"],
-            gratitude=row["gratitude"],
-            anxiety=row["anxiety"],
-            excitement=row["excitement"],
-            trust_signal=row["trust_signal"],
-            valence=row["valence"],
-            arousal=row["arousal"],
-            dominant_emotion=row["dominant_emotion"],
-            is_sarcastic=bool(row["is_sarcastic"]),
-        )
-
-    @staticmethod
-    def _row_to_identity_delta(row: sqlite3.Row) -> IdentityDelta:
-        return IdentityDelta(
-            id=row["id"],
-            user_id=row["user_id"],
-            text=row["text"],
-            confidence=row["confidence"],
-            source_episode_id=row["source_episode_id"],
-            created_at=_as_epoch(row["created_at"]) or 0.0,
-            applied=bool(row["applied"]),
-        )
 
     # -- Lossless context engine storage ------------------------------------
 
