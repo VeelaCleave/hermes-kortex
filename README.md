@@ -13,7 +13,7 @@ KORTEX gives Hermes two different but complementary memory layers:
   - emotional awareness & relationship modeling
   - SOUL.md identity evolution
   - OCEAN personality trait modeling
-  - semantic embeddings for vector-enhanced recall
+  - semantic embeddings for vector-enhanced recall (embeddings table in db.py, not yet wired)
   - evidence traces linking facts to source episodes
 - **ContextEngine layer** for same-session lossless context
   - archives exact dropped spans at compression time
@@ -43,7 +43,7 @@ KORTEX turns Hermes into a system with:
 - **Evidence traces** linking facts back to source episodes
 - **Lossless context compression** for same-session recall after Hermes compacts history
 - **Async dream-state maintenance** (DayDream + REMSleep)
-- **Semantic embeddings** for vector-enhanced recall
+- **Semantic embeddings** for vector-enhanced recall (embeddings table exists, not wired)
 - **Lightweight context injection** optimized for MOE models
 - **Database optimization** with vacuum, reindex, and compound indexes
 
@@ -75,7 +75,6 @@ Primary files:
 - `kortex/affect.py` — affect signal extraction
 - `kortex/calibrate.py` — per-user affect calibration
 - `kortex/ocean.py` — OCEAN Big Five personality modeling
-- `kortex/semantic.py` — semantic embedding utilities
 - `kortex/relationship.py` — relationship dynamics
 
 ### 2. Context Engine (`context.engine: kortex`)
@@ -184,7 +183,6 @@ kortex/
 ├── affect.py        — affect signal extraction
 ├── calibrate.py     — per-user affect calibration
 ├── ocean.py         — OCEAN Big Five personality modeling
-├── semantic.py      — semantic embedding utilities
 ├── relationship.py  — relationship dynamics
 ├── consolidate.py   — episode consolidation logic
 ├── dream.py         — DayDream + REMSleep async maintenance
@@ -510,7 +508,7 @@ KORTEX stores:
 - emotion logs
 - conversation summaries
 - OCEAN personality profiles (schema v4)
-- semantic embeddings (schema v4)
+- semantic embeddings (schema v4, table exists, not wired to recall)
 - lossless context conversations / aliases / archived messages / spans / refs / checkpoints
 
 ### Schema Version History
@@ -554,7 +552,7 @@ New in V2:
 - **Lightweight context injection** — ~10x faster, MOE-optimized
 - **OCEAN personality modeling** — Big Five trait tracking
 - **Dream system** — DayDream + REMSleep async maintenance
-- **Semantic embeddings** — Vector-enhanced recall table
+- **Semantic embeddings** — Vector-enhanced recall table (embeddings table exists, not wired to recall)
 - **Garbage ingestion filters** — Noise reduction, fact dedup
 - **Schema v4** — OCEAN tables, refined affect
 - **Reduced total_budget** — 1800 → 1230 for MOE models
