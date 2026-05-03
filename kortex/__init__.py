@@ -101,7 +101,11 @@ def register(ctx) -> None:
 
 
 def _kortex_passive_recall(provider: KortexProvider, kwargs: dict) -> dict:
-    """Passive memory injection — fires before every LLM call."""
+    """Passive memory injection — fires before every LLM call.
+
+    Uses delta-only injection: tracks last injection time per session and only
+    returns memories newer than that cutoff, avoiding repeated context across calls.
+    """
     try:
         user_message = kwargs.get("user_message", "")
         session_id = kwargs.get("session_id", "")
@@ -109,9 +113,15 @@ def _kortex_passive_recall(provider: KortexProvider, kwargs: dict) -> dict:
             provider.initialize(session_id)
         if not provider._recall:
             return {}
+        # Delta cutoff: only include memories created after the last LLM call
+        since = provider._last_injection.get(session_id, 0.0)
         context = provider._recall.build_context(
-            user_message, session_id=session_id, lightweight=True
+            user_message, session_id=session_id, user_id=provider._user_id,
+            lightweight=True, delta_since=since
         )
+        # Record injection time for next call's delta calculation
+        from .time_utils import now_epoch
+        provider._last_injection[session_id] = now_epoch()
         return {"context": context}
     except Exception:
         return {}

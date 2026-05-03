@@ -67,6 +67,8 @@ class KortexProvider(MemoryProvider):
         self._user_id: str = DEFAULT_USER_ID
         self._daydream_active = False
         self._daydream_lock = threading.Lock()
+        # Delta injection: track last injection time per session to avoid repeating content
+        self._last_injection: dict[str, float] = {}
 
     @property
     def name(self) -> str:

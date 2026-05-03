@@ -49,7 +49,7 @@ class Recall:
 
     def build_context(
         self, query: str, session_id: str = "", user_id: str = DEFAULT_USER_ID,
-        lightweight: bool = True
+        lightweight: bool = True, delta_since: float = 0.0
     ) -> str:
         """Build context for injection.
 
@@ -60,11 +60,14 @@ class Recall:
         - Conversation summaries
 
         This makes context injection ~10x faster.
+
+        delta_since: if > 0, only include facts/loops/threads created after this epoch.
+        Relationship state is always included (it's cheap and stable).
         """
         sections = []
 
         # ── Facts (always include, but deduplicated) ──────────────────────
-        selected_facts = self._select_facts(query, user_id=user_id)
+        selected_facts = self._select_facts(query, user_id=user_id, delta_since=delta_since)
         deduped_facts = self._deduplicate_facts(selected_facts)
         if deduped_facts is not selected_facts:
             selected_facts = deduped_facts
@@ -93,7 +96,7 @@ class Recall:
         # ── Episodes (lightweight: recent only, no graph/enrichment) ─────
         if lightweight:
             episodes_text = self._build_episodes_lightweight(
-                session_id, user_id=user_id
+                session_id, user_id=user_id, delta_since=delta_since
             )
         else:
             graph_budget = self._config.budget.get("graph", 300)
@@ -106,7 +109,7 @@ class Recall:
 
         # ── Open loops ────────────────────────────────────────────────────
         loops_budget = self._config.budget.get("open_loops", 150)
-        loops_text = self._build_loops_section(loops_budget, user_id=user_id)
+        loops_text = self._build_loops_section(loops_budget, user_id=user_id, delta_since=delta_since)
         if loops_text:
             sections.append(loops_text)
 
@@ -149,18 +152,29 @@ class Recall:
         return full
 
     def _build_episodes_lightweight(
-        self, session_id: str, user_id: str = DEFAULT_USER_ID
+        self, session_id: str, user_id: str = DEFAULT_USER_ID, delta_since: float = 0.0
     ) -> str:
-        """Lightweight episode recall — recent episodes only, no graph traversal or enrichment."""
-        recent = self._db.get_recent_episodes(limit=3, user_id=user_id)
+        """Lightweight episode recall — recent episodes only, no graph traversal or enrichment.
+
+        If delta_since > 0, only return episodes newer than that epoch to support
+        delta-only injection across consecutive LLM calls.
+        """
+        if delta_since > 0:
+            # Delta mode: only fetch episodes since last injection
+            episodes = self._db.get_recent_episodes(limit=10, user_id=user_id)
+            recent = [ep for ep in episodes if ep.timestamp > delta_since]
+        else:
+            # Full mode: return most recent episodes
+            recent = self._db.get_recent_episodes(limit=3, user_id=user_id)
+
         if not recent:
             return ""
-        
+
         now = now_epoch()
         lines = ["Recent memories:"]
         for ep in recent[:3]:
             lines.append(f"- {ep.to_recall_text(now)}")
-        
+
         return "\n".join(lines)
 
     def _build_conversation_summaries_section(
@@ -192,7 +206,7 @@ class Recall:
 
         return self._trim_to_budget("\n".join(lines), budget)
 
-    def _select_facts(self, query: str, user_id: str = DEFAULT_USER_ID) -> List[Fact]:
+    def _select_facts(self, query: str, user_id: str = DEFAULT_USER_ID, delta_since: float = 0.0) -> List[Fact]:
         facts: List[Fact] = []
 
         if query:
@@ -219,6 +233,19 @@ class Recall:
                 facts = self._db.search_facts(
                     query, limit=self._config.max_facts_per_recall, user_id=user_id
                 )
+
+        # Always include recent facts not already in results (delta signal)
+        if delta_since > 0 and len(facts) < self._config.max_facts_per_recall:
+            recent_threshold = self._config.max_facts_per_recall - len(facts)
+            recent_facts = [
+                f for f in self._db.get_active_facts(
+                    subject_type="user",
+                    limit=recent_threshold * 2,
+                    user_id=user_id,
+                )
+                if f.first_seen > delta_since and not any(existing.id == f.id for existing in facts)
+            ]
+            facts.extend(recent_facts[:recent_threshold])
 
         if len(facts) < self._config.max_facts_per_recall:
             top_facts = self._db.get_active_facts(
@@ -536,9 +563,9 @@ class Recall:
             return 0
         return min(self._config.graph_expansion_limit, max(1, graph_budget // 75))
 
-    def _build_loops_section(self, budget: int, user_id: str = DEFAULT_USER_ID) -> str:
+    def _build_loops_section(self, budget: int, user_id: str = DEFAULT_USER_ID, delta_since: float = 0.0) -> str:
         lines = []
-        
+
         # ── Active open loops (with status labels) ──────────────────────
         active_loops = self._db.get_active_open_loops(
             days_threshold=self._config.stale_loop_days,
@@ -550,7 +577,12 @@ class Recall:
             limit=max(1, self._config.max_loops_per_recall // 2),
             user_id=user_id
         )
-        
+
+        # Delta mode: only show loops created or updated since last injection
+        if delta_since > 0:
+            active_loops = [l for l in active_loops if l.created_at > delta_since]
+            stale_loops = [l for l in stale_loops if l.updated_at and l.updated_at > delta_since]
+
         if active_loops or stale_loops:
             lines.append("Open threads:")
             for loop in active_loops:
@@ -560,7 +592,7 @@ class Recall:
                 kind_label = loop.kind.replace("_", " ")
                 days_old = int((now_epoch() - loop.created_at) / 86400)
                 lines.append(f"  - [STALE] [{kind_label}] {loop.text} ({days_old}d)")
-        
+
         # ── Recently resolved loops (completion markers) ────────────────
         if self._config.show_completion_markers:
             resolved = self._db.get_recently_resolved_loops(
@@ -569,16 +601,20 @@ class Recall:
                 user_id=user_id
             )
             if resolved:
-                lines.append("Recently completed:")
-                for loop in resolved:
-                    kind_label = loop.kind.replace("_", " ")
-                    days_ago = int((now_epoch() - (loop.resolved_at or loop.created_at)) / 86400)
-                    resolution = loop.resolution or "resolved"
-                    lines.append(f"  - [COMPLETED] [{kind_label}] {loop.text} → {resolution} ({days_ago}d)")
-        
+                # Delta mode: only show resolved since last injection
+                if delta_since > 0:
+                    resolved = [l for l in resolved if l.resolved_at and l.resolved_at > delta_since]
+                if resolved:
+                    lines.append("Recently completed:")
+                    for loop in resolved:
+                        kind_label = loop.kind.replace("_", " ")
+                        days_ago = int((now_epoch() - (loop.resolved_at or loop.created_at)) / 86400)
+                        resolution = loop.resolution or "resolved"
+                        lines.append(f"  - [COMPLETED] [{kind_label}] {loop.text} → {resolution} ({days_ago}d)")
+
         if not lines:
             return ""
-        
+
         text = "\n".join(lines)
         return self._trim_to_budget(text, budget)
 
