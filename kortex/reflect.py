@@ -228,12 +228,11 @@ def extract_mistakes(
         (_REPETITION_PATTERNS, "Had to repeat"),
         (_WRONG_OUTPUT_PATTERNS, "Produced error"),
     ]:
-        for pat in patterns:
-            if pat.search(user_text):
-                desc = _extract_context(user_text, pat, prefix=prefix)
-                if desc:
-                    mistakes.append(desc)
-                break
+        pat = next((pat for pat in patterns if pat.search(user_text)), None)
+        if pat:
+            desc = _extract_context(user_text, pat, prefix=prefix)
+            if desc:
+                mistakes.append(desc)
 
     return mistakes
 
