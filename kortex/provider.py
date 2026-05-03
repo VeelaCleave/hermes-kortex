@@ -99,7 +99,23 @@ class KortexProvider(MemoryProvider):
         self._promoter = Promoter(self._db, soul_path=self._config.soul_path)
         self._consolidator = Consolidator(self._db, self._linker, self._config)
 
+        # Batch-backfill embeddings for existing episodes/facts (one-time migration)
+        self._migrate_embeddings()
+
         logger.info("KORTEX initialized (session=%s, db=%s)", session_id, db_path)
+
+    def _migrate_embeddings(self) -> None:
+        """One-time batch embedding migration for existing data without embeddings."""
+        try:
+            from .semantic import SemanticSearch
+            search = SemanticSearch(self._db)
+            search.build_vocab()
+            eps = search.batch_embed_episodes(user_id=self._user_id)
+            facts = search.batch_embed_facts(user_id=self._user_id)
+            if eps > 0 or facts > 0:
+                logger.info("KORTEX embedding migration: %d episodes, %d facts", eps, facts)
+        except Exception:
+            logger.debug("KORTEX embedding migration skipped", exc_info=True)
 
     def system_prompt_block(self) -> str:
         if not self._config.passive_context_hint:
@@ -360,7 +376,79 @@ class KortexProvider(MemoryProvider):
                 timer.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return []
+        return [
+            {
+                "name": "kortex_query",
+                "description": (
+                    "Query KORTEX experiential memory. Searches episodes, facts, open loops, "
+                    "and identity deltas. Returns ranked results. "
+                    "Use for: recalling past conversations, finding facts, checking open threads.\n\n"
+                    "Actions:\n"
+                    "- search: Search memory by query string\n"
+                    "- recent: Get recent episodes\n"
+                    "- facts: List known facts\n"
+                    "- loops: List open threads\n"
+                    "- status: Memory statistics\n"
+                    "- consolidate: Run consolidation\n"
+                    "- identity: Manage identity deltas\n"
+                    "- export/import: Backup/restore memory"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "search", "recent", "facts", "loops",
+                                "status", "consolidate", "identity",
+                                "export", "import",
+                            ],
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Search query or identity action",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max results (default: 5)",
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "Additional params (e.g. for identity actions)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+            {
+                "name": "kortex_recall",
+                "description": "Search archived KORTEX lossless conversation history and checkpoint refs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "limit": {"type": "integer", "description": "Max results", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "kortex_expand",
+                "description": "Expand exact archived KORTEX messages for a checkpoint ref or sequence range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ref_id": {
+                            "type": "string",
+                            "description": "Reference id from kortex_recall",
+                        },
+                        "start_seq": {"type": "integer", "description": "Optional start sequence"},
+                        "end_seq": {"type": "integer", "description": "Optional end sequence"},
+                        "limit": {"type": "integer", "description": "Max messages", "default": 8},
+                    },
+                },
+            },
+        ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         if tool_name != "kortex_query":
@@ -630,6 +718,33 @@ class KortexProvider(MemoryProvider):
             query, limit=limit, user_id=self._user_id
         )
 
+        # Try semantic hybrid search for additional episode results
+        semantic_episodes = []
+        semantic_facts = []
+        try:
+            from .semantic import SemanticSearch
+            search = SemanticSearch(self._db)
+            search.build_vocab()
+            sem_eps = search.search_episodes_hybrid(
+                query, limit=limit, user_id=self._user_id
+            )
+            for r in sem_eps:
+                ep = self._db.get_episode(r["id"])
+                if ep and not any(e.id == ep.id for e in episodes):
+                    semantic_episodes.append(ep)
+            sem_facts = search.search_facts_hybrid(
+                query, limit=limit, user_id=self._user_id
+            )
+            for r in sem_facts:
+                f = self._db.get_fact(r["id"])
+                if f and not any(f.id == ff.id for ff in facts):
+                    semantic_facts.append(f)
+        except Exception:
+            pass
+
+        all_episodes = episodes + semantic_episodes
+        all_facts = facts + semantic_facts
+
         results = {
             "episodes": [
                 {
@@ -639,22 +754,23 @@ class KortexProvider(MemoryProvider):
                     "salience": e.salience,
                     "valence": e.valence,
                 }
-                for e in episodes
+                for e in all_episodes
             ],
             "facts": [
                 {"id": f.id, "text": f.object_text, "confidence": f.confidence}
-                for f in facts
+                for f in all_facts
             ],
             "reflections": [
                 {"id": r.id, "text": r.text, "kind": r.kind, "confidence": r.confidence}
                 for r in reflections
             ],
+            "search_mode": "hybrid" if semantic_episodes or semantic_facts else "fts5",
         }
 
         if self._config.search_format == "json":
             return json.dumps(results)
 
-        return self._format_search_narrative(query, episodes, facts, reflections)
+        return self._format_search_narrative(query, all_episodes, all_facts, reflections)
 
     def _handle_recent(self, limit: int) -> str:
         episodes = self._db.get_recent_episodes(limit=limit, user_id=self._user_id)

@@ -514,7 +514,11 @@ class TestProviderIdentityIntegration:
     def test_get_tool_schemas_returns_all_tools(self, tmp_path):
         provider = _provider(tmp_path)
         schemas = provider.get_tool_schemas()
-        assert len(schemas) == 0
+        assert len(schemas) == 3
+        names = {s["name"] for s in schemas}
+        assert "kortex_query" in names
+        assert "kortex_recall" in names
+        assert "kortex_expand" in names
         provider.shutdown()
 
     def test_handle_tool_call_dispatches_kortex_query_correctly(self, tmp_path):

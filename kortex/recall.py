@@ -18,6 +18,7 @@ from .calibrate import calibrate_affect
 from .db import DEFAULT_USER_ID, KortexDB
 from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
+from .semantic import SemanticSearch
 from .time_utils import detect_temporal_window_days, epoch_to_display, now_epoch, query_emotion_score
 
 logger = logging.getLogger(__name__)
@@ -28,40 +29,59 @@ CHARS_PER_TOKEN = 4
 class Recall:
     """Retrieves and packs memory context for injection."""
 
+    _REL_CACHE_TTL = 60.0  # seconds
+
     def __init__(
         self, db: KortexDB, config: KortexConfig, linker: Optional[Linker] = None
     ):
         self._db = db
         self._config = config
         self._linker = linker
+        self._semantic: Optional[SemanticSearch] = None
+        self._rel_text_cache: str = ""
+        self._rel_text_expires: float = 0.0
+
+    def _get_semantic(self) -> Optional[SemanticSearch]:
+        """Lazily create SemanticSearch instance."""
+        if self._semantic is None:
+            self._semantic = SemanticSearch(self._db)
+        return self._semantic
 
     def build_context(
         self, query: str, session_id: str = "", user_id: str = DEFAULT_USER_ID,
         lightweight: bool = True
     ) -> str:
         """Build context for injection.
-        
+
         In lightweight mode (default), skip expensive operations:
         - Graph traversal
         - Episode enrichment with links
         - Ocean personality scoring
         - Conversation summaries
-        
+
         This makes context injection ~10x faster.
         """
         sections = []
-        budget_used = 0
-        
+
         # ── Facts (always include, but deduplicated) ──────────────────────
         selected_facts = self._select_facts(query, user_id=user_id)
         deduped_facts = self._deduplicate_facts(selected_facts)
         if deduped_facts is not selected_facts:
             selected_facts = deduped_facts
 
-        # ── Relationship state (always include) ──────────────────────────
-        relationship = self._db.get_relationship(user_id=user_id)
-        rel_text = relationship.to_compact_text()
-        if relationship.total_turns > 0:
+        # ── Relationship state (cached, 60s TTL) ────────────────────────
+        now = now_epoch()
+        if now < self._rel_text_expires and self._rel_text_cache:
+            rel_text = self._rel_text_cache
+        else:
+            relationship = self._db.get_relationship(user_id=user_id)
+            rel_text = relationship.to_compact_text()
+            if relationship.total_turns > 0:
+                self._rel_text_cache = rel_text
+                self._rel_text_expires = now + self._REL_CACHE_TTL
+            else:
+                rel_text = ""
+        if rel_text:
             sections.append(rel_text)
 
         # ── Facts section ─────────────────────────────────────────────────
@@ -71,9 +91,16 @@ class Recall:
             sections.append(facts_text)
 
         # ── Episodes (lightweight: recent only, no graph/enrichment) ─────
-        episodes_text = self._build_episodes_lightweight(
-            session_id, user_id=user_id
-        )
+        if lightweight:
+            episodes_text = self._build_episodes_lightweight(
+                session_id, user_id=user_id
+            )
+        else:
+            graph_budget = self._config.budget.get("graph", 300)
+            episodes_budget = self._config.budget.get("episodes", 400)
+            episodes_text = self._build_episodes_section(
+                query, session_id, episodes_budget, graph_budget, user_id=user_id
+            )
         if episodes_text:
             sections.append(episodes_text)
 
@@ -82,6 +109,36 @@ class Recall:
         loops_text = self._build_loops_section(loops_budget, user_id=user_id)
         if loops_text:
             sections.append(loops_text)
+
+        # ── Non-lightweight sections ─────────────────────────────────────
+        if not lightweight:
+            # OCEAN personality profile section
+            ocean_text = self._build_ocean_section(user_id)
+            if ocean_text:
+                sections.append(ocean_text)
+
+            # Conversation summaries
+            summaries_budget = self._config.budget.get("summaries", 150)
+            summaries_text = self._build_conversation_summaries_section(
+                query, session_id, summaries_budget, user_id=user_id
+            )
+            if summaries_text:
+                sections.append(summaries_text)
+
+            # Learned behaviors / reflections
+            reflections_budget = self._config.budget.get("reflections", 100)
+            reflections_text = self._build_reflections_section(
+                reflections_budget, user_id=user_id
+            )
+            if reflections_text:
+                sections.append(reflections_text)
+
+            # Emotional trajectory
+            trajectory_text = self._build_emotional_trajectory(
+                session_id, user_id=user_id
+            )
+            if trajectory_text:
+                sections.append(trajectory_text)
 
         if not sections:
             return ""
@@ -139,9 +196,29 @@ class Recall:
         facts: List[Fact] = []
 
         if query:
-            facts = self._db.search_facts(
-                query, limit=self._config.max_facts_per_recall, user_id=user_id
-            )
+            # Try hybrid semantic + FTS5 search first
+            search = self._get_semantic()
+            if search:
+                try:
+                    # Build vocab lazily to ensure it's ready
+                    search.build_vocab()
+                    semantic_results = search.search_facts_hybrid(
+                        query,
+                        limit=self._config.max_facts_per_recall,
+                        user_id=user_id,
+                    )
+                    if semantic_results:
+                        fact_ids = [r["id"] for r in semantic_results]
+                        facts = [self._db.get_fact(fid) for fid in fact_ids if self._db.get_fact(fid)]
+                        facts = [f for f in facts if f is not None]
+                except Exception:
+                    pass
+
+            # Fall back to FTS5 if semantic didn't return results
+            if not facts:
+                facts = self._db.search_facts(
+                    query, limit=self._config.max_facts_per_recall, user_id=user_id
+                )
 
         if len(facts) < self._config.max_facts_per_recall:
             top_facts = self._db.get_active_facts(
@@ -222,6 +299,26 @@ class Recall:
             search_results = self._db.search_episodes(query, limit=10, user_id=user_id)
             candidates.extend(search_results)
             search_result_ids = {ep.id for ep in search_results if ep.id is not None}
+
+            # Add semantic hybrid search results
+            search = self._get_semantic()
+            if search:
+                try:
+                    search.build_vocab()
+                    semantic_results = search.search_episodes_hybrid(
+                        query,
+                        limit=10,
+                        user_id=user_id,
+                    )
+                    for r in semantic_results:
+                        eid = r["id"]
+                        if eid not in search_result_ids:
+                            ep = self._db.get_episode(eid)
+                            if ep:
+                                candidates.append(ep)
+                                search_result_ids.add(eid)
+                except Exception:
+                    pass
         else:
             search_result_ids = set()
 
@@ -720,9 +817,10 @@ class Recall:
             confidence = profile.get("confidence", 0.5)
             turn_count = profile.get("turn_count", 1)
 
-            # Format as compact bar chart
+            # Format as compact text bars (ASCII-safe)
             def bar(score):
-                return "█" * int(score * 10) + "░" * (10 - int(score * 10))
+                filled = int(score * 10)
+                return "[" + "=" * filled + "-" * (10 - filled) + "]"
 
             lines = [
                 f"OCEAN profile ({turn_count} turns, {confidence:.0%} confidence):",

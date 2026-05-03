@@ -491,6 +491,7 @@ class KortexDB:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             conn.executescript(_SCHEMA_SQL)
+            conn.executescript(_OCEAN_SCHEMA_SQL)
             conn.executescript(_LOSSLESS_CONTEXT_SCHEMA_SQL)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._record_schema_version(conn)

@@ -17,10 +17,11 @@ import re
 import threading
 from typing import Any, List, Optional, Tuple
 
-from .db import KortexDB
+from .db import DEFAULT_USER_ID, KortexDB
 from .extract_llm import extract_structured_memory
 from .linker import Linker
 from .models import Episode, Fact, OpenLoop
+from .semantic import SemanticSearch
 from .time_utils import now_epoch
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,7 @@ class Ingestor:
         self._turn_counter: dict[str, int] = {}
         self._auxiliary_client: Any = None
         self._extraction_mode: str = "heuristic"
+        self._semantic: Optional[SemanticSearch] = None
 
     def configure_extraction(
         self, mode: str = "heuristic", auxiliary_client: Any = None
@@ -294,7 +296,35 @@ class Ingestor:
                     ep.entities = ",".join(structured["entities"][:5])
 
         ep.id = self._db.insert_episode(ep)
+
+        # Auto-embed episode for vector similarity search
+        self._embed_episode(ep)
+
         return ep
+
+    def _get_semantic(self) -> SemanticSearch:
+        """Lazily create SemanticSearch instance."""
+        if self._semantic is None:
+            self._semantic = SemanticSearch(self._db)
+        return self._semantic
+
+    def _embed_episode(self, ep: Episode) -> None:
+        """Generate and store TF-IDF embedding for an episode."""
+        try:
+            search = self._get_semantic()
+            search.embed_episode(
+                ep.id, ep.user_text, ep.assistant_text, user_id=ep.user_id
+            )
+        except Exception:
+            logger.debug("Embedding failed for episode %d", ep.id, exc_info=True)
+
+    def _embed_fact(self, fact: Fact) -> None:
+        """Generate and store TF-IDF embedding for a fact."""
+        try:
+            search = self._get_semantic()
+            search.embed_fact(fact.id, fact.object_text, user_id=fact.user_id)
+        except Exception:
+            logger.debug("Embedding failed for fact %d", fact.id, exc_info=True)
 
     def extract_open_loops(
         self, user_text: str, episode_id: int, user_id: str = "__default__"
@@ -390,6 +420,7 @@ class Ingestor:
                     new_fact.id = self._db.insert_fact(new_fact)
                     self._apply_fact_conflict(existing, new_fact)
                     results.append(new_fact)
+                    self._embed_fact(new_fact)
                     logger.debug(
                         "KORTEX fact superseded: [%s] '%s' -> '%s'",
                         predicate,
@@ -407,6 +438,7 @@ class Ingestor:
                 )
                 new_fact.id = self._db.insert_fact(new_fact)
                 results.append(new_fact)
+                self._embed_fact(new_fact)
 
         return results
 
@@ -513,6 +545,9 @@ class Ingestor:
         self, user_text: str, assistant_text: str
     ) -> Optional[dict]:
         if self._extraction_mode == "heuristic":
+            # LLM extraction only used when mode="llm" AND an auxiliary_client is provided
+            return None
+        if self._auxiliary_client is None:
             return None
         structured = extract_structured_memory(
             user_text,
@@ -521,8 +556,6 @@ class Ingestor:
         )
         if structured:
             return structured
-        if self._extraction_mode == "llm":
-            return None
         return None
 
     @staticmethod

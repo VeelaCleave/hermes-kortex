@@ -20,6 +20,10 @@ _DEFAULT_MEMORY_TYPES = {
     "reflections",
     "conversation_summaries",
     "identity_deltas",
+    "ocean_profiles",
+    "affect_baselines",
+    "entity_links",
+    "emotion_log",
 }
 
 
@@ -89,6 +93,44 @@ def export_to_json(
             and _within_range(delta.created_at, start_ts, end_ts)
         ]
 
+    if "ocean_profiles" in type_filter:
+        try:
+            profile = db.get_ocean_profile(user_id=user_id)
+            if profile:
+                payload["ocean_profiles"] = [profile]
+        except Exception:
+            pass  # Schema v4 DB without ocean_profiles table
+
+    if "affect_baselines" in type_filter:
+        try:
+            baseline = db.get_affect_baseline(user_id=user_id)
+            if baseline:
+                payload["affect_baselines"] = [_affect_baseline_to_dict(baseline)]
+        except Exception:
+            pass  # Schema without affect_baselines
+
+    if "entity_links" in type_filter:
+        try:
+            conn = db._get_conn()
+            rows = conn.execute(
+                "SELECT * FROM entity_links WHERE src_id IN (SELECT id FROM episodes WHERE user_id=?) OR dst_id IN (SELECT id FROM episodes WHERE user_id=?)",
+                (user_id, user_id),
+            ).fetchall()
+            payload["entity_links"] = [dict(row) for row in rows]
+        except Exception:
+            pass
+
+    if "emotion_log" in type_filter:
+        try:
+            conn = db._get_conn()
+            rows = conn.execute(
+                "SELECT el.* FROM emotion_log el JOIN episodes ep ON el.episode_id=ep.id WHERE ep.user_id=? ORDER BY el.timestamp DESC LIMIT 5000",
+                (user_id,),
+            ).fetchall()
+            payload["emotion_log"] = [dict(row) for row in rows]
+        except Exception:
+            pass
+
     return json.dumps(payload)
 
 
@@ -113,6 +155,10 @@ def import_from_json(
         "reflections": 0,
         "conversation_summaries": 0,
         "identity_deltas": 0,
+        "ocean_profiles": 0,
+        "affect_baselines": 0,
+        "entity_links": 0,
+        "emotion_log": 0,
     }
 
     for item in parsed.get("episodes", []):
@@ -233,6 +279,63 @@ def import_from_json(
         if delta.applied:
             db.mark_identity_delta_applied(delta.id)
         imported["identity_deltas"] += 1
+
+    for item in parsed.get("ocean_profiles", []):
+        db.upsert_ocean_profile(
+            user_id=item.get("user_id", user_id),
+            openness=item.get("openness", 0.5),
+            conscientiousness=item.get("conscientiousness", 0.5),
+            extraversion=item.get("extraversion", 0.5),
+            agreeableness=item.get("agreeableness", 0.5),
+            neuroticism=item.get("neuroticism", 0.5),
+            confidence=item.get("confidence", 0.3),
+            turn_count=item.get("turn_count", 0),
+        )
+        imported["ocean_profiles"] = imported.get("ocean_profiles", 0) + 1
+
+    for item in parsed.get("affect_baselines", []):
+        from .calibrate import AffectBaseline
+        baseline = AffectBaseline(
+            user_id=item.get("user_id", user_id),
+            baseline_warmth=item.get("baseline_warmth", 0.5),
+            baseline_trust_signal=item.get("baseline_trust_signal", 0.5),
+            baseline_formality=item.get("baseline_formality", 0.5),
+            sample_count=item.get("sample_count", 0),
+        )
+        db.upsert_affect_baseline(baseline)
+        imported["affect_baselines"] = imported.get("affect_baselines", 0) + 1
+
+    for item in parsed.get("entity_links", []):
+        conn = db._get_conn()
+        conn.execute(
+            """INSERT OR IGNORE INTO entity_links
+               (src_type, src_id, dst_type, dst_id, relation, weight)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                item.get("src_type"),
+                item.get("src_id"),
+                item.get("dst_type"),
+                item.get("dst_id"),
+                item.get("relation"),
+                item.get("weight", 1.0),
+            ),
+        )
+        imported["entity_links"] = imported.get("entity_links", 0) + 1
+
+    for item in parsed.get("emotion_log", []):
+        from .models import AffectSignal
+        signal = AffectSignal(
+            valence=item.get("valence", 0.0),
+            arousal=item.get("arousal", 0.0),
+            dominant_emotion=item.get("dominant_emotion", "neutral"),
+        )
+        db.insert_emotion_log(
+            signal,
+            episode_id=item.get("episode_id"),
+            session_id=item.get("session_id", ""),
+            user_id=item.get("user_id", user_id),
+        )
+        imported["emotion_log"] = imported.get("emotion_log", 0) + 1
 
     return {"ok": True, "imported": imported}
 
@@ -375,4 +478,14 @@ def _identity_delta_to_dict(delta: Any) -> Dict[str, Any]:
         "source_episode_id": delta.source_episode_id,
         "created_at": _iso_or_none(delta.created_at),
         "applied": delta.applied,
+    }
+
+
+def _affect_baseline_to_dict(baseline: Any) -> Dict[str, Any]:
+    return {
+        "user_id": baseline.user_id,
+        "baseline_warmth": baseline.baseline_warmth,
+        "baseline_trust_signal": baseline.baseline_trust_signal,
+        "baseline_formality": baseline.baseline_formality,
+        "sample_count": baseline.sample_count,
     }

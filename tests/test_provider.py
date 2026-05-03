@@ -152,8 +152,12 @@ class TestProviderToolCall:
     def test_tool_schemas(self, tmp_path):
         p = self._setup_provider(tmp_path)
         schemas = p.get_tool_schemas()
-        # Tool registered via __init__.py, not provider
-        assert len(schemas) == 0
+        # Provider exposes kortex_query, kortex_recall, kortex_expand tools
+        assert len(schemas) == 3
+        names = {s["name"] for s in schemas}
+        assert "kortex_query" in names
+        assert "kortex_recall" in names
+        assert "kortex_expand" in names
         p.shutdown()
 
     def test_status_action(self, tmp_path):

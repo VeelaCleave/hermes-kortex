@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from kortex.db import KortexDB
+from kortex.db import DEFAULT_USER_ID, KortexDB
 from kortex.config import KortexConfig
 from kortex.consolidate import Consolidator
 from kortex.linker import Linker
@@ -151,10 +151,10 @@ def rem_sleep(
     reflections_decayed = db.decay_stale_reflections(days_threshold=reflection_decay_days)
     logger.info(f"  Decayed {reflections_decayed} stale reflections")
 
-    # Phase 5: Database vacuum
-    logger.info("Phase 5 (Vacuum): Compacting database...")
-    db._get_conn().execute("VACUUM")
-    logger.info("  Vacuum complete")
+    # Phase 5: Database optimization (vacuum + reindex + analyze + compound indexes)
+    logger.info("Phase 5 (Optimize): Compacting and analyzing database...")
+    db.optimize_database()
+    logger.info("  Optimization complete")
 
     final = get_db_stats(db)
     logger.info(f"Final stats: {final}")
@@ -193,24 +193,59 @@ def _audit_evidence(db_path: str, fact_id: int | None = None) -> dict:
     return results
 
 
+def batch_embed(db_path: str, user_id: str = DEFAULT_USER_ID) -> dict:
+    """Batch-embed all unembedded episodes and facts.
+
+    Run this once to backfill embeddings for existing data,
+    or periodically to ensure full coverage.
+    """
+    logger.info("🔢 Starting batch embedding migration...")
+    start_time = time.time()
+
+    db = KortexDB(db_path)
+    try:
+        from kortex.semantic import SemanticSearch
+        search = SemanticSearch(db)
+        search.build_vocab()
+
+        eps = search.batch_embed_episodes(user_id=user_id)
+        logger.info(f"  Embedded {eps} episodes")
+
+        facts = search.batch_embed_facts(user_id=user_id)
+        logger.info(f"  Embedded {facts} facts")
+
+        elapsed = time.time() - start_time
+        logger.info(f"🔢 Batch embedding complete: {eps} episodes, {facts} facts in {elapsed:.1f}s")
+        return {"mode": "batch_embed", "episodes": eps, "facts": facts, "elapsed_seconds": elapsed}
+    except Exception:
+        logger.exception("Batch embedding failed")
+        return {"mode": "batch_embed", "error": str(Exception)}
+    finally:
+        db.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kortex Dream State")
     parser.add_argument(
         "mode",
-        choices=["daydream", "rem", "audit-evidence"],
-        help="Dream mode: 'daydream' (quick), 'rem' (deep), or 'audit-evidence' (fact evidence)"
+        choices=["daydream", "rem", "audit-evidence", "batch-embed"],
+        help="Dream mode: 'daydream' (quick), 'rem' (deep), 'audit-evidence' (fact evidence), 'batch-embed' (backfill embeddings)"
     )
     parser.add_argument("--db", default=os.path.expanduser("~/.hermes/kortex.db"))
     parser.add_argument("--max-age-days", type=int, default=7)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--fact-id", type=int, default=None,
                         help="Fact ID for evidence chain lookup (audit-evidence mode)")
+    parser.add_argument("--user-id", default=DEFAULT_USER_ID,
+                        help="User ID for batch embedding")
     args = parser.parse_args()
 
     if args.mode == "daydream":
         result = daydream(args.db, max_age_days=args.max_age_days)
     elif args.mode == "rem":
         result = rem_sleep(args.db, max_age_days=args.max_age_days)
+    elif args.mode == "batch-embed":
+        result = batch_embed(args.db, user_id=args.user_id)
     else:
         result = _audit_evidence(args.db, fact_id=args.fact_id)
 
