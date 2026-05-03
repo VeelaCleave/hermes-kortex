@@ -13,6 +13,7 @@ from kortex.db import KortexDB
 from kortex.models import Episode
 from kortex.recall import Recall
 from kortex.config import KortexConfig
+from kortex.time_utils import query_emotion_score
 import tempfile
 
 
@@ -65,27 +66,27 @@ class TestQueryEmotionScore:
 
     def test_positive_query_scores_positive(self, recall):
         """Positive words should yield positive score."""
-        score = recall._query_emotion_score("awesome breakthrough success")
+        score = query_emotion_score("awesome breakthrough success")
         assert score > 0.3
 
     def test_negative_query_scores_negative(self, recall):
         """Negative words should yield negative score."""
-        score = recall._query_emotion_score("frustrated angry bug")
+        score = query_emotion_score("frustrated angry bug")
         assert score < -0.3
 
     def test_neutral_query_scores_near_zero(self, recall):
         """Neutral words should yield near-zero score."""
-        score = recall._query_emotion_score("the quick brown fox")
+        score = query_emotion_score("the quick brown fox")
         assert abs(score) < 0.1
 
     def test_mixed_query_scores_mid(self, recall):
         """Mixed positive/negative should be near zero."""
-        score = recall._query_emotion_score("great but frustrating")
+        score = query_emotion_score("great but frustrating")
         assert -0.5 < score < 0.5
 
     def test_empty_query_scores_zero(self, recall):
         """Empty query should score zero."""
-        score = recall._query_emotion_score("")
+        score = query_emotion_score("")
         assert score == 0.0
 
 

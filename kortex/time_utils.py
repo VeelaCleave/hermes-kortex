@@ -6,8 +6,10 @@ Internal storage uses epoch floats. Human-facing output can still render
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 
 def now_epoch() -> float:
@@ -67,3 +69,55 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 def _ema(current: float, target: float, alpha: float) -> float:
     """Exponential moving average step."""
     return (1 - alpha) * current + alpha * target
+
+
+def query_emotion_score(query: str) -> float:
+    """Estimate emotional valence of a query string from -1.0 (negative) to +1.0 (positive)."""
+    if not query:
+        return 0.0
+    q = query.lower()
+    positive_words = {
+        "awesome", "great", "love", "excited", "happy", "amazing", "fantastic",
+        "brilliant", "perfect", "wonderful", "nice", "good", "best", "beautiful",
+        "shipped", "breakthrough", "finally", "celebrate", "win", "success",
+    }
+    negative_words = {
+        "frustrat", "annoy", "angr", "hate", "suck", "bug", "error", "fail",
+        "sigh", "ugh", "meh", "worried", "anxious", "confused", "tired",
+        "disappoint", "stuck", "slow", "glitch", "crash", "regret",
+    }
+    pos_count = neg_count = 0
+    for word in q.split():
+        if word in positive_words:
+            pos_count += 1
+        elif word in negative_words:
+            neg_count += 1
+        elif any(stem in word for stem in negative_words):
+            neg_count += 1
+        elif any(stem in word for stem in positive_words):
+            pos_count += 1
+    total = pos_count + neg_count
+    return 0.0 if total == 0 else (pos_count - neg_count) / total
+
+
+def detect_temporal_window_days(query: str) -> Optional[float]:
+    """Detect temporal window from query string (e.g. 'last week' -> 7.0)."""
+    if not query:
+        return None
+    lowered = query.lower()
+    direct_map = {"today": 0.0, "yesterday": 1.0, "last week": 7.0, "last month": 30.0}
+    for phrase, days in direct_map.items():
+        if phrase in lowered:
+            return days
+    if "in march" in lowered:
+        return 30.0
+    match = re.search(r"(\d+)\s+(day|days|week|weeks|month|months)\s+ago", lowered)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2)
+    if unit.startswith("day"):
+        return value
+    if unit.startswith("week"):
+        return value * 7.0
+    return value * 30.0

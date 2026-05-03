@@ -18,7 +18,7 @@ from .calibrate import calibrate_affect
 from .db import DEFAULT_USER_ID, KortexDB
 from .linker import Linker
 from .models import AffectSignal, Episode, Fact, OpenLoop, Reflection, RelationshipState
-from .time_utils import epoch_to_display, now_epoch
+from .time_utils import detect_temporal_window_days, epoch_to_display, now_epoch, query_emotion_score
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ class Recall:
     ) -> str:
         now = now_epoch()
         candidates: List[Episode] = []
-        temporal_window_days = self._detect_temporal_window_days(query)
+        temporal_window_days = detect_temporal_window_days(query)
 
         if query:
             search_results = self._db.search_episodes(query, limit=10, user_id=user_id)
@@ -577,54 +577,6 @@ class Recall:
 
         return " ".join(parts)
 
-    @staticmethod
-    def _query_emotion_score(query: str) -> float:
-        """Estimate the emotional valence of a query string.
-
-        Returns a rough valence estimate from -1.0 (negative) to +1.0 (positive).
-        Used for affect-aware ranking: positive queries match positive memories.
-        """
-        if not query:
-            return 0.0
-
-        q = query.lower()
-        positive_words = {
-            "awesome", "great", "love", "excited", "happy", "amazing", "fantastic",
-            "brilliant", "perfect", "wonderful", "nice", "good", "best", "beautiful",
-            "shipped", "breakthrough", "finally", "celebrate", "win", "success",
-        }
-        negative_words = {
-            "frustrat", "annoy", "angr", "hate", "suck", "bug", "error", "fail",
-            "sigh", "ugh", "meh", "worried", "anxious", "confused", "tired",
-            "disappoint", "stuck", "slow", "glitch", "crash", "regret",
-        }
-
-        # Use substring matching for stems (e.g. "frustrat" matches "frustrating")
-        pos_count = 0
-        neg_count = 0
-        for word in q.split():
-            if word in positive_words:
-                pos_count += 1
-            elif word in negative_words:
-                neg_count += 1
-            else:
-                # Check if any negative stem is contained in the word
-                for stem in negative_words:
-                    if stem in word:
-                        neg_count += 1
-                        break
-                # Check if any positive stem is contained in the word
-                for stem in positive_words:
-                    if stem in word:
-                        pos_count += 1
-                        break
-
-        total = pos_count + neg_count
-        if total == 0:
-            return 0.0
-
-        return (pos_count - neg_count) / total
-
     def _rank_episode(
         self,
         ep: Episode,
@@ -681,7 +633,7 @@ class Recall:
         # Positive queries match positive episodes, negative matches negative
         emotion_boost = 0.0
         if query:
-            query_valence = self._query_emotion_score(query)
+            query_valence = query_emotion_score(query)
             ep_valence_norm = ep.valence / 2.0  # Normalize -2..+2 to -1..+1
             # Same-sign emotions boost, opposite signs slightly penalize
             if query_valence * ep_valence_norm > 0:
@@ -752,37 +704,6 @@ class Recall:
         if strength < self._config.warm_memory_threshold:
             return "warm"
         return "active"
-
-    @staticmethod
-    def _detect_temporal_window_days(query: str) -> Optional[float]:
-        if not query:
-            return None
-
-        lowered = query.lower()
-        direct_map = {
-            "today": 0.0,
-            "yesterday": 1.0,
-            "last week": 7.0,
-            "last month": 30.0,
-        }
-        for phrase, days in direct_map.items():
-            if phrase in lowered:
-                return days
-
-        if "in march" in lowered:
-            return 30.0
-
-        match = re.search(r"(\d+)\s+(day|days|week|weeks|month|months)\s+ago", lowered)
-        if not match:
-            return None
-
-        value = float(match.group(1))
-        unit = match.group(2)
-        if unit.startswith("day"):
-            return value
-        if unit.startswith("week"):
-            return value * 7.0
-        return value * 30.0
 
     def _build_ocean_section(self, user_id: str) -> str:
         """Build the OCEAN personality profile section for recall context."""
