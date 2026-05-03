@@ -416,7 +416,7 @@ class Recall:
                 continue
             for idx in range(len(tokens) - size + 1):
                 candidate = " ".join(tokens[idx : idx + size])
-                entity_id = self._linker._entity_id(candidate)
+                entity_id = self._linker.entity_id(candidate)
                 if entity_id in seen:
                     continue
                 if not self._db.get_links_from(

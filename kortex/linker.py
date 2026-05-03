@@ -321,6 +321,10 @@ class Linker:
         digest = hashlib.sha1(name.strip().lower().encode("utf-8")).hexdigest()
         return int(digest[:15], 16)
 
+    def entity_id(self, name: str) -> int:
+        """Public wrapper for _entity_id — use this instead of accessing _entity_id directly."""
+        return self._entity_id(name)
+
     @staticmethod
     def _unique_positive_ids(values: List[int]) -> List[int]:
         seen = set()
