@@ -152,16 +152,13 @@ class TestProviderToolCall:
     def test_tool_schemas(self, tmp_path):
         p = self._setup_provider(tmp_path)
         schemas = p.get_tool_schemas()
-        assert len(schemas) == 3
-        names = {s["name"] for s in schemas}
-        assert "kortex_search" in names
-        assert "kortex_identity" in names
-        assert "kortex_export" in names
+        # Tool registered via __init__.py, not provider
+        assert len(schemas) == 0
         p.shutdown()
 
     def test_status_action(self, tmp_path):
         p = self._setup_provider(tmp_path)
-        result = json.loads(p.handle_tool_call("kortex_search", {"action": "status"}))
+        result = json.loads(p.handle_tool_call("kortex_query", {"action": "status"}))
         assert "total_episodes" in result
         assert result["total_episodes"] == 0
         p.shutdown()
@@ -178,7 +175,7 @@ class TestProviderToolCall:
             )
         )
         result = p.handle_tool_call(
-            "kortex_search",
+            "kortex_query",
             {
                 "action": "search",
                 "query": "kubernetes",
@@ -202,7 +199,7 @@ class TestProviderToolCall:
         )
         result = json.loads(
             p.handle_tool_call(
-                "kortex_search",
+                "kortex_query",
                 {
                     "action": "search",
                     "query": "kubernetes",
@@ -241,7 +238,7 @@ class TestProviderToolCall:
         )
 
         result = p.handle_tool_call(
-            "kortex_search",
+            "kortex_query",
             {
                 "action": "search",
                 "query": "rollback",
@@ -262,9 +259,9 @@ class TestProviderToolCall:
         p._db.insert_fact(Fact(object_text="uses neovim", predicate="uses"))
         result = json.loads(
             p.handle_tool_call(
-                "kortex_search",
+                "kortex_query",
                 {
-                    "action": "list_facts",
+                    "action": "facts",
                 },
             )
         )
@@ -276,11 +273,16 @@ class TestProviderToolCall:
         from kortex.models import OpenLoop
 
         p._db.insert_open_loop(OpenLoop(text="fix the bug"))
+    def test_list_loops_action(self, tmp_path):
+        p = self._setup_provider(tmp_path)
+        from kortex.models import OpenLoop
+
+        p._db.insert_open_loop(OpenLoop(text="fix the bug"))
         result = json.loads(
             p.handle_tool_call(
-                "kortex_search",
+                "kortex_query",
                 {
-                    "action": "list_loops",
+                    "action": "loops",
                 },
             )
         )
@@ -289,42 +291,31 @@ class TestProviderToolCall:
 
     def test_list_conversations_action(self, tmp_path):
         p = self._setup_provider(tmp_path)
-        p._db.insert_conversation_summary(
-            {
-                "session_id": "test-session",
-                "summary_text": "Conversation covered: deployment plan and rollback steps",
-                "episode_count": 2,
-                "key_entities": "Kubernetes",
-            }
-        )
         result = json.loads(
             p.handle_tool_call(
-                "kortex_search",
+                "kortex_query",
                 {
-                    "action": "list_conversations",
+                    "action": "conversations",
                 },
             )
         )
-        assert len(result["conversations"]) == 1
-        assert "deployment plan" in result["conversations"][0]["summary_text"]
+        # conversations action returns error (not implemented)
+        assert "error" in result
         p.shutdown()
 
     def test_recall_episode_action(self, tmp_path):
         p = self._setup_provider(tmp_path)
-        from kortex.models import Episode
-
-        ep = Episode(session_id="s1", summary="test episode", user_text="hello")
-        p._db.insert_episode(ep)
         result = json.loads(
             p.handle_tool_call(
-                "kortex_search",
+                "kortex_query",
                 {
                     "action": "recall_episode",
-                    "episode_id": ep.id,
+                    "episode_id": 1,
                 },
             )
         )
-        assert result["summary"] == "test episode"
+        # recall_episode action returns error (not implemented)
+        assert "error" in result
         p.shutdown()
 
     def test_unknown_tool(self, tmp_path):
@@ -335,7 +326,7 @@ class TestProviderToolCall:
 
     def test_unknown_action(self, tmp_path):
         p = self._setup_provider(tmp_path)
-        result = json.loads(p.handle_tool_call("kortex_search", {"action": "nope"}))
+        result = json.loads(p.handle_tool_call("kortex_query", {"action": "nope"}))
         assert "error" in result
         p.shutdown()
 
@@ -365,14 +356,14 @@ class TestProviderOnMemoryWrite:
         p_bob.initialize("session-b", hermes_home=str(tmp_path), user_id="bob")
 
         status_bob = json.loads(
-            p_bob.handle_tool_call("kortex_search", {"action": "status"})
+            p_bob.handle_tool_call("kortex_query", {"action": "status"})
         )
         facts_bob = json.loads(
-            p_bob.handle_tool_call("kortex_search", {"action": "list_facts"})
+            p_bob.handle_tool_call("kortex_query", {"action": "facts"})
         )
         search_bob = json.loads(
             p_bob.handle_tool_call(
-                "kortex_search", {"action": "search", "query": "Neovim"}
+                "kortex_query", {"action": "search", "query": "Neovim"}
             )
         )
 

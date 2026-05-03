@@ -227,7 +227,8 @@ class TestProviderIntegration:
         provider._user_id = "default"
         provider._db = KortexDB(db_path)
         provider._trigger_daydream()
-        time.sleep(0.5)
+        # Wait for the daydream thread to complete (flag resets after 5s)
+        time.sleep(6)
         assert provider._daydream_active == False
         provider._db.close()
 

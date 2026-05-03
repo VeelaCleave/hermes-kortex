@@ -513,14 +513,14 @@ class TestDBIdentityDeltaStage6Methods:
 class TestProviderIdentityIntegration:
     def test_get_tool_schemas_returns_all_tools(self, tmp_path):
         provider = _provider(tmp_path)
-        names = {schema["name"] for schema in provider.get_tool_schemas()}
-        assert names == {"kortex_search", "kortex_identity", "kortex_export"}
+        schemas = provider.get_tool_schemas()
+        assert len(schemas) == 0
         provider.shutdown()
 
-    def test_handle_tool_call_dispatches_kortex_identity_correctly(self, tmp_path):
+    def test_handle_tool_call_dispatches_kortex_query_correctly(self, tmp_path):
         provider = _provider(tmp_path, soul_path=str(tmp_path / "SOUL.md"))
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "list_pending"})
+            provider.handle_tool_call("kortex_query", {"action": "list_pending"})
         )
         assert "pending" in result
         provider.shutdown()
@@ -529,7 +529,7 @@ class TestProviderIdentityIntegration:
         provider = _provider(tmp_path)
         _delta(provider._db, text="pending from provider")
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "list_pending"})
+            provider.handle_tool_call("kortex_query", {"action": "list_pending"})
         )
         assert result["pending"][0]["text"] == "pending from provider"
         provider.shutdown()
@@ -542,7 +542,7 @@ class TestProviderIdentityIntegration:
         )
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity", {"action": "preview", "delta_id": delta.id}
+                "kortex_query", {"action": "preview", "delta_id": delta.id}
             )
         )
         assert result["text"] == "provider preview"
@@ -556,7 +556,7 @@ class TestProviderIdentityIntegration:
 
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity", {"action": "approve", "delta_id": delta.id}
+                "kortex_query", {"action": "approve", "delta_id": delta.id}
             )
         )
 
@@ -570,7 +570,7 @@ class TestProviderIdentityIntegration:
 
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity", {"action": "reject", "delta_id": delta.id}
+                "kortex_query", {"action": "reject", "delta_id": delta.id}
             )
         )
 
@@ -586,7 +586,7 @@ class TestProviderIdentityIntegration:
 
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity",
+                "kortex_query",
                 {"action": "approve_all", "min_confidence": 0.6},
             )
         )
@@ -601,7 +601,7 @@ class TestProviderIdentityIntegration:
         soul_path.write_text("# SOUL\n", encoding="utf-8")
         provider = _provider(tmp_path, soul_path=str(soul_path))
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "show_soul"})
+            provider.handle_tool_call("kortex_query", {"action": "show_soul"})
         )
         assert result["content"] == "# SOUL\n"
         provider.shutdown()
@@ -609,7 +609,7 @@ class TestProviderIdentityIntegration:
     def test_handle_tool_call_unknown_action_returns_error(self, tmp_path):
         provider = _provider(tmp_path)
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "wat"})
+            provider.handle_tool_call("kortex_query", {"action": "wat"})
         )
         assert "error" in result
         provider.shutdown()
@@ -620,7 +620,7 @@ class TestProviderIdentityIntegration:
     ):
         provider = _provider(tmp_path)
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": action})
+            provider.handle_tool_call("kortex_query", {"action": action})
         )
         assert result["error"] == "delta_id required"
         provider.shutdown()
@@ -629,7 +629,7 @@ class TestProviderIdentityIntegration:
         soul_path = tmp_path / "SOUL.md"
         provider = _provider(tmp_path, soul_path=str(soul_path))
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "show_soul"})
+            provider.handle_tool_call("kortex_query", {"action": "show_soul"})
         )
         assert result["soul_path"] == str(soul_path)
         provider.shutdown()
@@ -639,7 +639,7 @@ class TestProviderIdentityIntegration:
         _delta(provider._db, text="too low", confidence=0.2)
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity", {"action": "approve_all", "min_confidence": 0.9}
+                "kortex_query", {"action": "approve_all", "min_confidence": 0.9}
             )
         )
         assert result["applied_count"] == 0
@@ -694,7 +694,7 @@ class TestStage6EdgeCases:
     def test_show_soul_returns_empty_content_when_missing(self, tmp_path):
         provider = _provider(tmp_path, soul_path=str(tmp_path / "SOUL.md"))
         result = json.loads(
-            provider.handle_tool_call("kortex_identity", {"action": "show_soul"})
+            provider.handle_tool_call("kortex_query", {"action": "show_soul"})
         )
         assert result["content"] == ""
         provider.shutdown()
@@ -706,7 +706,7 @@ class TestStage6EdgeCases:
         _delta(provider._db, text="high first", confidence=0.95)
 
         provider.handle_tool_call(
-            "kortex_identity", {"action": "approve_all", "min_confidence": 0.6}
+            "kortex_query", {"action": "approve_all", "min_confidence": 0.6}
         )
         content = soul_path.read_text(encoding="utf-8")
 
@@ -719,7 +719,7 @@ class TestStage6EdgeCases:
             _delta(provider._db, text=f"delta {index}", confidence=0.9 - index / 10)
         result = json.loads(
             provider.handle_tool_call(
-                "kortex_identity", {"action": "list_pending", "limit": 2}
+                "kortex_query", {"action": "list_pending", "limit": 2}
             )
         )
         assert len(result["pending"]) == 2

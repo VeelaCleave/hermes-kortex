@@ -32,127 +32,6 @@ from .ocean import score_turn as score_ocean_turn
 
 logger = logging.getLogger(__name__)
 
-
-KORTEX_SEARCH_SCHEMA = {
-    "name": "kortex_search",
-    "description": (
-        "Search KORTEX experiential memory. Use this to recall past conversations, "
-        "events, emotional moments, commitments, or facts about the user.\n\n"
-        "Actions:\n"
-        "- search: Full-text search across all memories\n"
-        "- recall_episode: Get details of a specific episode by ID\n"
-        "- list_facts: List known durable facts\n"
-        "- list_loops: List open commitments/threads\n"
-        "- list_conversations: List stored whole-conversation summaries\n"
-        "- consolidate: Merge old raw episodes into summary episodes\n"
-        "- status: Show memory statistics"
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": [
-                    "search",
-                    "recall_episode",
-                    "list_facts",
-                    "list_loops",
-                    "list_conversations",
-                    "consolidate",
-                    "status",
-                ],
-            },
-            "query": {
-                "type": "string",
-                "description": "Search query (for 'search' action)",
-            },
-            "episode_id": {
-                "type": "integer",
-                "description": "Episode ID (for 'recall_episode' action)",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Max results (default: 5)",
-            },
-        },
-        "required": ["action"],
-    },
-}
-
-KORTEX_IDENTITY_SCHEMA = {
-    "name": "kortex_identity",
-    "description": (
-        "Manage identity evolution via KORTEX. Review learned personality traits "
-        "and optionally promote them to SOUL.md for permanent identity changes.\n\n"
-        "Actions:\n"
-        "- list_pending: Show identity deltas awaiting review\n"
-        "- preview: Preview a specific delta with source context\n"
-        "- approve: Apply a delta to SOUL.md (makes it permanent)\n"
-        "- reject: Discard a delta\n"
-        "- approve_all: Apply all pending deltas above confidence threshold\n"
-        "- show_soul: Display current SOUL.md content"
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": [
-                    "list_pending",
-                    "preview",
-                    "approve",
-                    "reject",
-                    "approve_all",
-                    "show_soul",
-                ],
-            },
-            "delta_id": {
-                "type": "integer",
-                "description": "Identity delta ID (for preview/approve/reject)",
-            },
-            "min_confidence": {
-                "type": "number",
-                "description": "Minimum confidence for approve_all (default: 0.6)",
-            },
-        },
-        "required": ["action"],
-    },
-}
-
-KORTEX_EXPORT_SCHEMA = {
-    "name": "kortex_export",
-    "description": (
-        "Export or import KORTEX memory as JSON backups.\n\n"
-        "Actions:\n"
-        "- export: Dump memories to JSON\n"
-        "- import: Restore memories from JSON"
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["export", "import"]},
-            "user_id": {"type": "string", "description": "Optional user scope"},
-            "start": {"type": "string", "description": "Optional start timestamp"},
-            "end": {"type": "string", "description": "Optional end timestamp"},
-            "types": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional memory types to include",
-            },
-            "payload": {
-                "type": "string",
-                "description": "JSON payload for import action",
-            },
-            "allow_override": {
-                "type": "boolean",
-                "description": "Allow schema mismatch on import",
-            },
-        },
-        "required": ["action"],
-    },
-}
-
-
 try:
     from agent.memory_provider import MemoryProvider
 except ImportError:
@@ -170,7 +49,6 @@ except ImportError:
 
         def get_tool_schemas(self):
             return []
-
 
 class KortexProvider(MemoryProvider):
     def __init__(self, config: Optional[KortexConfig] = None):
@@ -264,15 +142,10 @@ class KortexProvider(MemoryProvider):
         threading.Thread(target=_bg, daemon=True).start()
 
     def _filter_user_content(self, content: str) -> tuple[str, bool]:
-        """Filter out system prompts, tool outputs, and other non-conversation content from user messages.
-        
-        Returns (cleaned_content, skip_entire_turn).
-        skip_entire_turn is True if the user content is purely system noise.
-        """
+        """Filter out system prompts, tool outputs, and other non-conversation content."""
         if not content:
             return ("", True)
         
-        # Patterns that indicate system-generated content (not real user input)
         system_patterns = [
             "[System note:",
             "[memory-context]",
@@ -294,7 +167,6 @@ class KortexProvider(MemoryProvider):
         
         for pattern in system_patterns:
             if pattern.lower() in content.lower():
-                # Strip the system noise but keep any real user text
                 lines = content.split("\n")
                 real_lines = []
                 for line in lines:
@@ -318,13 +190,10 @@ class KortexProvider(MemoryProvider):
         if not content:
             return content
         
-        # Remove tool result blocks
         lines = content.split("\n")
         clean_lines = []
-        in_tool_block = False
         
         for line in lines:
-            # Skip lines that are clearly tool/system output
             if any(pattern in line for pattern in [
                 "EXIT_CODE", "EXIT: 124", "EXIT: 0",
                 "passed in", "failed in",
@@ -344,11 +213,9 @@ class KortexProvider(MemoryProvider):
         if not self._ingestor or not self._db:
             return
 
-        # ── Filter out garbage before ingesting ──────────────────────────
         user_clean, skip_user = self._filter_user_content(user_content)
         assistant_clean = self._filter_assistant_content(assistant_content)
 
-        # If both sides are empty after filtering, skip the turn entirely
         if not user_clean.strip() and not assistant_clean.strip():
             return
 
@@ -365,6 +232,7 @@ class KortexProvider(MemoryProvider):
 
                 facts = []
                 reflections = []
+                resolved_loops = []
 
                 if self._config.auto_extract:
                     self._ingestor.extract_open_loops(
@@ -385,9 +253,8 @@ class KortexProvider(MemoryProvider):
                             user_id=self._user_id,
                         )
                     )
-                else:
-                    resolved_loops = []
 
+                # Affect scoring - BACKGROUND ONLY, not exposed as tool
                 affect = score_affect(user_clean, assistant_clean)
                 baseline = self._db.get_affect_baseline(user_id=self._user_id)
                 if affect.is_significant:
@@ -443,7 +310,7 @@ class KortexProvider(MemoryProvider):
                     self._consolidator.maybe_consolidate(user_id=self._user_id)
                     self._trigger_daydream()
 
-                # ── OCEAN personality scoring ────────────────────────────
+                # OCEAN scoring - BACKGROUND ONLY
                 self._update_ocean(user_clean, assistant_clean)
 
                 logger.debug(
@@ -459,11 +326,10 @@ class KortexProvider(MemoryProvider):
         threading.Thread(target=_bg, daemon=True).start()
 
     def _update_ocean(self, user_content: str, assistant_content: str) -> None:
-        """Update OCEAN personality profile for the current user."""
+        """Update OCEAN personality profile — runs in background thread."""
         if not self._db:
             return
         try:
-            # Get existing profile or start fresh
             existing = self._db.get_ocean_profile(self._user_id)
             if existing:
                 current = self._make_ocean_score(existing)
@@ -471,10 +337,8 @@ class KortexProvider(MemoryProvider):
                 from .ocean import OCEANScore
                 current = OCEANScore()
 
-            # Score this turn and smooth
             scored = score_ocean_turn(user_content, assistant_content, current)
 
-            # Persist to DB
             self._db.upsert_ocean_profile(
                 user_id=self._user_id,
                 openness=scored.openness,
@@ -488,9 +352,20 @@ class KortexProvider(MemoryProvider):
         except Exception:
             logger.exception("KORTEX _update_ocean failed")
 
+    def _make_ocean_score(self, existing) -> Any:
+        from .ocean import OCEANScore
+        return OCEANScore(
+            openness=existing.openness,
+            conscientiousness=existing.conscientiousness,
+            extraversion=existing.extraversion,
+            agreeableness=existing.agreeableness,
+            neuroticism=existing.neuroticism,
+            confidence=existing.confidence,
+            turn_count=existing.turn_count,
+        )
+
     def _trigger_daydream(self) -> None:
         """Trigger DayDream asynchronously after consolidation.
-
         Runs in a daemon thread so it doesn't block the sync turn.
         Only one DayDream can run at a time (simple lock).
         """
@@ -499,74 +374,62 @@ class KortexProvider(MemoryProvider):
 
         db_path = self._config.db_path or str(Path(self._hermes_home) / "kortex.db")
 
-        def _daydream_thread():
+        def _dream():
             try:
-                from .dream import daydream as run_daydream
-                run_daydream(db_path)
+                from .dream import daydream
+                daydream(db_path)
             except Exception:
-                logger.exception("KORTEX DayDream failed")
-            finally:
-                with self._daydream_lock:
-                    self._daydream_active = False
+                logger.exception("KORTEX daydream failed")
 
         with self._daydream_lock:
-            if self._daydream_active:
-                return  # Already running, don't double-spawn
-            self._daydream_active = True
+            if not self._daydream_active:
+                self._daydream_active = True
+                threading.Thread(target=_dream, daemon=True).start()
 
-        threading.Thread(target=_daydream_thread, daemon=True).start()
-
-    def _make_ocean_score(self, data: Dict[str, Any]) -> Any:
-        """Reconstruct an OCEANScore from DB row."""
-        from .ocean import OCEANScore
-        return OCEANScore(
-            openness=data.get("openness", 0.5),
-            conscientiousness=data.get("conscientiousness", 0.5),
-            extraversion=data.get("extraversion", 0.5),
-            agreeableness=data.get("agreeableness", 0.5),
-            neuroticism=data.get("neuroticism", 0.5),
-            confidence=data.get("confidence", 0.5),
-            turn_count=data.get("turn_count", 0),
-            user_id=data.get("user_id", self._user_id),
-        )
+        # Reset the flag after a short delay
+        def _reset_flag():
+            time.sleep(5)
+            with self._daydream_lock:
+                self._daydream_active = False
+        threading.Thread(target=_reset_flag, daemon=True).start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [KORTEX_SEARCH_SCHEMA, KORTEX_IDENTITY_SCHEMA, KORTEX_EXPORT_SCHEMA]
+        return []
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
-        if tool_name not in {"kortex_search", "kortex_identity", "kortex_export"}:
+        if tool_name != "kortex_query":
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
         if not self._db:
             return json.dumps({"error": "KORTEX not initialized"})
 
         try:
-            if tool_name == "kortex_search":
-                action = args.get("action", "")
-                query = args.get("query", "")
-                limit = args.get("limit", 5)
+            action = args.get("action", "")
+            query = args.get("query", "")
+            limit = args.get("limit", 5)
 
-                if action == "search":
-                    return self._handle_search(query, limit)
-                elif action == "recall_episode":
-                    return self._handle_recall_episode(args.get("episode_id"))
-                elif action == "list_facts":
-                    return self._handle_list_facts(limit)
-                elif action == "list_loops":
-                    return self._handle_list_loops(limit)
-                elif action == "list_conversations":
-                    return self._handle_list_conversations(limit)
-                elif action == "consolidate":
-                    return self._handle_consolidate(limit)
-                elif action == "status":
-                    return self._handle_status()
-                else:
-                    return json.dumps({"error": f"Unknown action: {action}"})
-
-            if tool_name == "kortex_export":
+            if action == "search":
+                return self._handle_search(query, limit)
+            elif action == "recent":
+                return self._handle_recent(limit)
+            elif action == "facts":
+                return self._handle_list_facts(limit)
+            elif action == "loops":
+                return self._handle_list_loops(limit)
+            elif action == "status":
+                return self._handle_status()
+            elif action == "consolidate":
+                return self._handle_consolidate(limit)
+            elif action == "identity":
+                return self._handle_identity_call(args)
+            elif action in ("list_pending", "preview", "approve", "reject", "approve_all", "show_soul"):
+                return self._handle_identity_call(args)
+            elif action == "export":
                 return self._handle_export_call(args)
-
-            return self._handle_identity_call(args)
+            elif action == "import":
+                return self._handle_import_call(args)
+            else:
+                return json.dumps({"error": f"Unknown action: {action}"})
         except Exception as exc:
             logger.exception("KORTEX tool call failed")
             return json.dumps({"error": str(exc)})
@@ -594,14 +457,7 @@ class KortexProvider(MemoryProvider):
         logger.info("KORTEX session ended with %d messages", len(messages))
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
-        """Pre-compression hook: archive middle messages and return reduced list.
-
-        CRITICAL: Must return a REDUCED message list (or empty string to skip).
-        Hermes uses this return value to replace the full context — returning
-        JSON text caused the LLM compressor to still process ALL messages and
-        time out. The fix: delegate to context_engine.compress() which returns
-        [head + checkpoint + tail].
-        """
+        """Pre-compression hook: archive middle messages and return reduced list."""
         if not self._db:
             return ""
 
@@ -621,9 +477,6 @@ class KortexProvider(MemoryProvider):
                 focus_topic=self._config.focus_topic or "",
             )
 
-            # Safety: if compress() returned the original messages list (no-op),
-            # returning it would cause the LLM compressor to still process all
-            # messages and time out. Skip compression instead.
             if result is messages or (isinstance(result, list) and len(result) == len(messages)):
                 return ""
 
@@ -837,6 +690,16 @@ class KortexProvider(MemoryProvider):
 
         return self._format_search_narrative(query, episodes, facts, reflections)
 
+    def _handle_recent(self, limit: int) -> str:
+        episodes = self._db.get_recent_episodes(limit=limit, user_id=self._user_id)
+        if not episodes:
+            return "No recent episodes found."
+        
+        lines = ["Recent memories:"]
+        for ep in episodes:
+            lines.append(f"- [{ep.timestamp_iso}] {ep.summary or ep.user_text[:100]}")
+        return "\n".join(lines)
+
     def _format_search_narrative(
         self,
         query: str,
@@ -1013,7 +876,6 @@ class KortexProvider(MemoryProvider):
             {
                 "total_episodes": total_episodes,
                 "active_episodes": unconsolidated_raw_episodes,
-                "unconsolidated_raw_episodes": unconsolidated_raw_episodes,
                 "active_facts": len(facts),
                 "open_loops": len(loops),
                 "reflections": len(reflections),
@@ -1025,126 +887,97 @@ class KortexProvider(MemoryProvider):
                     "humor": round(rel.humor, 3),
                     "total_turns": rel.total_turns,
                 },
-                "recent_emotional_state": [
-                    {
-                        "emotion": calibrate_affect(
-                            e,
-                            baseline,
-                            minimum_samples=self._config.affect_calibration_min_samples,
-                        ).dominant_emotion,
-                        "valence": calibrate_affect(
-                            e,
-                            baseline,
-                            minimum_samples=self._config.affect_calibration_min_samples,
-                        ).valence,
-                        "arousal": calibrate_affect(
-                            e,
-                            baseline,
-                            minimum_samples=self._config.affect_calibration_min_samples,
-                        ).arousal,
-                    }
-                    for e in recent_emotions[:3]
-                ],
+                "recent_emotional_state": {
+                    "recent_emotions": [
+                        {"emotion": e.emotion, "intensity": e.intensity, "dominant_emotion": e.dominant_emotion}
+                        for e in recent_emotions
+                    ],
+                    "baseline": {
+                        "baseline_warmth": baseline.baseline_warmth,
+                        "baseline_trust": baseline.baseline_trust_signal,
+                        "sample_count": baseline.sample_count,
+                    } if baseline else None,
+                },
             }
         )
 
     def _handle_consolidate(self, limit: Optional[int]) -> str:
         if not self._consolidator:
-            return json.dumps({"error": "KORTEX consolidator not initialized"})
-        return json.dumps(self._consolidator.consolidate(limit=limit))
+            return json.dumps({"error": "Consolidator not initialized"})
 
-    def _handle_export_call(self, args: Dict[str, Any]) -> str:
-        if not self._db:
-            return json.dumps({"error": "KORTEX not initialized"})
-
-        action = args.get("action", "")
-        target_user = args.get("user_id", self._user_id)
-
-        if action == "export":
-            return export_to_json(
-                self._db,
-                user_id=target_user,
-                start=args.get("start"),
-                end=args.get("end"),
-                memory_types=args.get("types"),
-            )
-
-        if action == "import":
-            payload = args.get("payload")
-            if not payload:
-                return json.dumps({"error": "payload required for import"})
-            return json.dumps(
-                import_from_json(
-                    self._db,
-                    payload,
-                    allow_override=bool(args.get("allow_override", False)),
-                )
-            )
-
-        return json.dumps({"error": f"Unknown export action: {action}"})
+        try:
+            result = self._consolidator.consolidate(limit=limit or 10)
+            return json.dumps({"consolidated_episodes": result})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
 
     def _handle_identity_call(self, args: Dict[str, Any]) -> str:
         if not self._promoter:
-            return json.dumps({"error": "KORTEX promoter not initialized"})
+            return json.dumps({"error": "Promoter not initialized"})
 
         action = args.get("action", "")
-        delta_id = args.get("delta_id")
-
         if action == "list_pending":
             limit = args.get("limit", 20)
-            deltas = self._promoter.list_pending(limit=limit)
-            return json.dumps(
-                {
-                    "pending": [
-                        {
-                            "id": delta.id,
-                            "text": delta.text[:500],
-                            "confidence": delta.confidence,
-                            "created_at": epoch_to_iso(delta.created_at),
-                            "source_episode_id": delta.source_episode_id,
-                        }
-                        for delta in deltas
-                    ]
-                }
-            )
-
-        if action == "preview":
+            pending = self._promoter.list_pending(limit)
+            result = []
+            for p in pending:
+                result.append({
+                    "id": p.id, "text": p.text, "confidence": p.confidence,
+                    "source_episode_id": p.source_episode_id,
+                    "created_at": p.created_at, "applied": p.applied
+                })
+            return json.dumps({"pending": result})
+        elif action == "preview":
+            delta_id = args.get("delta_id")
             if delta_id is None:
                 return json.dumps({"error": "delta_id required"})
-            return json.dumps(self._promoter.preview_delta(delta_id))
-
-        if action == "approve":
+            result = self._promoter.preview_delta(delta_id)
+            return json.dumps(result)
+        elif action == "approve":
+            delta_id = args.get("delta_id")
             if delta_id is None:
                 return json.dumps({"error": "delta_id required"})
-            return json.dumps(self._promoter.approve_and_apply(delta_id))
-
-        if action == "reject":
+            result = self._promoter.approve_and_apply(delta_id)
+            return json.dumps(result)
+        elif action == "reject":
+            delta_id = args.get("delta_id")
             if delta_id is None:
                 return json.dumps({"error": "delta_id required"})
-            return json.dumps(self._promoter.reject_delta(delta_id))
+            result = self._promoter.reject_delta(delta_id)
+            return json.dumps(result)
+        elif action == "approve_all":
+            min_confidence = args.get("min_confidence", 0.6)
+            pending = self._promoter.list_pending(100)
+            ids = [p.id for p in pending if p.confidence >= min_confidence]
+            result = self._promoter.approve_multiple(ids)
+            return json.dumps(result)
+        elif action == "show_soul":
+            soul_path = args.get("soul_path") or self._config.soul_path
+            if soul_path and Path(soul_path).exists():
+                return json.dumps({"soul_path": str(soul_path), "content": Path(soul_path).read_text()})
+            return json.dumps({"soul_path": soul_path or "", "content": ""})
+        else:
+            return json.dumps({"error": f"Unknown identity action: {action}"})
 
-        if action == "approve_all":
-            min_confidence = float(args.get("min_confidence", 0.6))
-            pending = self._promoter.list_pending(limit=1000)
-            eligible_ids = [
-                delta.id
-                for delta in pending
-                if delta.id is not None and delta.confidence >= min_confidence
-            ]
-            return json.dumps(
-                {
-                    "min_confidence": min_confidence,
-                    **self._promoter.approve_multiple(eligible_ids),
-                }
+    def _handle_export_call(self, args: Dict[str, Any]) -> str:
+        user_id = args.get("user_id") or self._user_id
+        start = args.get("start")
+        end = args.get("end")
+        types = args.get("types")
+        try:
+            data = export_to_json(
+                self._db, user_id=user_id, start=start, end=end, memory_types=types
             )
+            return json.dumps({"export": data})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
 
-        if action == "show_soul":
-            soul_content = self._promoter.get_soul_content()
-            return json.dumps(
-                {
-                    "soul_path": str(self._promoter._resolve_soul_path()),
-                    "content": soul_content,
-                }
-            )
-
-        return json.dumps({"error": f"Unknown action: {action}"})
+    def _handle_import_call(self, args: Dict[str, Any]) -> str:
+        payload = args.get("payload", "{}")
+        try:
+            result = import_from_json(self._db, payload)
+            if isinstance(result, dict) and not result.get("ok", True):
+                return json.dumps({"error": result.get("error", "Import failed")})
+            return json.dumps({"imported": True})
+        except Exception as e:
+            return json.dumps({"error": str(e)})

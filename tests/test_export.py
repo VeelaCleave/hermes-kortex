@@ -77,17 +77,20 @@ def test_provider_export_tool_integration(tmp_path):
     p.initialize("test-session", hermes_home=str(tmp_path))
     p._db.insert_episode(Episode(session_id="s1", summary="provider export"))
 
-    exported = json.loads(p.handle_tool_call("kortex_export", {"action": "export"}))
-    assert exported["episodes"][0]["summary"] == "provider export"
+    exported = json.loads(p.handle_tool_call("kortex_query", {"action": "export"}))
+    # Export returns {"export": json_string}, parse it
+    export_data = json.loads(exported["export"])
+    assert export_data["episodes"][0]["summary"] == "provider export"
 
-    imported = json.loads(
+    # Import with invalid schema returns error
+    result = json.loads(
         p.handle_tool_call(
-            "kortex_export",
+            "kortex_query",
             {
                 "action": "import",
                 "payload": json.dumps({"metadata": {"kortex_schema_version": 999}}),
             },
         )
     )
-    assert imported["ok"] is False
+    assert "error" in result
     p.shutdown()
