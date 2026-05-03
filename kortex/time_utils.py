@@ -26,7 +26,7 @@ def parse_timestamp(value: float | int | str | datetime | None) -> float | None:
             value = value.replace(tzinfo=timezone.utc)
         return value.timestamp()
 
-    raw = str(value).strip()
+    raw = value.strip()
     if not raw:
         return None
 
