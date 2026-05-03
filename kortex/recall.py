@@ -524,39 +524,22 @@ class Recall:
             return ""
 
         baseline = self._db.get_affect_baseline(user_id=user_id)
-        calibrated_trajectory = [
-            {
+        calibrated_trajectory = []
+        for entry in trajectory:
+            signal = AffectSignal(
+                valence=entry["valence"],
+                arousal=entry["arousal"],
+                dominant_emotion=entry["emotion"],
+            )
+            calibrated = calibrate_affect(
+                signal, baseline, minimum_samples=self._config.affect_calibration_min_samples
+            )
+            calibrated_trajectory.append({
                 "timestamp": entry["timestamp"],
-                "emotion": calibrate_affect(
-                    AffectSignal(
-                        valence=entry["valence"],
-                        arousal=entry["arousal"],
-                        dominant_emotion=entry["emotion"],
-                    ),
-                    baseline,
-                    minimum_samples=self._config.affect_calibration_min_samples,
-                ).dominant_emotion,
-                "valence": calibrate_affect(
-                    AffectSignal(
-                        valence=entry["valence"],
-                        arousal=entry["arousal"],
-                        dominant_emotion=entry["emotion"],
-                    ),
-                    baseline,
-                    minimum_samples=self._config.affect_calibration_min_samples,
-                ).valence,
-                "arousal": calibrate_affect(
-                    AffectSignal(
-                        valence=entry["valence"],
-                        arousal=entry["arousal"],
-                        dominant_emotion=entry["emotion"],
-                    ),
-                    baseline,
-                    minimum_samples=self._config.affect_calibration_min_samples,
-                ).arousal,
-            }
-            for entry in trajectory
-        ]
+                "emotion": calibrated.dominant_emotion,
+                "valence": calibrated.valence,
+                "arousal": calibrated.arousal,
+            })
 
         recent_emotions = [
             entry["emotion"]
