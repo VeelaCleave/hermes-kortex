@@ -11,6 +11,17 @@ from .db import KortexDB
 from .models import Episode
 
 
+_RELATION_WEIGHTS = {
+    "extracted_from": 1.0,
+    "related_to": 0.7,
+    "co_occurs": 0.6,
+    "triggered": 0.6,
+    "resolves": 0.7,
+    "supersedes": 0.4,
+    "contradicts": 0.3,
+}
+
+
 class Linker:
     """Creates and traverses lightweight memory graph edges."""
 
@@ -306,15 +317,7 @@ class Linker:
 
     @staticmethod
     def _relation_weight(relation: str) -> float:
-        return {
-            "extracted_from": 1.0,
-            "related_to": 0.7,
-            "co_occurs": 0.6,
-            "triggered": 0.6,
-            "resolves": 0.7,
-            "supersedes": 0.4,
-            "contradicts": 0.3,
-        }.get(relation, 0.5)
+        return _RELATION_WEIGHTS.get(relation, 0.5)
 
     @staticmethod
     def _entity_id(name: str) -> int:
