@@ -1,6 +1,16 @@
 #!/bin/bash
 # Sync hermes-kortex from repo to ~/.hermes/plugins/kortex
-# Usage: bash scripts/sync-to-hermes.sh
+#
+# IMPORTANT: The installed plugin must be FLAT:
+#   ~/.hermes/plugins/kortex/plugin.yaml
+#   ~/.hermes/plugins/kortex/__init__.py
+#   ~/.hermes/plugins/kortex/provider.py
+#   ...
+#
+# The memory provider and context engine discovery systems look for
+# __init__.py DIRECTLY inside ~/.hermes/plugins/kortex/ — NOT in a nested
+# subdirectory. If you nest it (kortex/kortex/__init__.py), both systems
+# fail to find it.
 
 set -euo pipefail
 
@@ -9,14 +19,17 @@ INSTALL_DIR="$HOME/.hermes/plugins/kortex"
 
 echo "📦 Syncing hermes-kortex to Hermes plugins..."
 
-# Ensure target directory exists
-mkdir -p "$INSTALL_DIR/kortex"
+# Remove old installation (clean slate)
+rm -rf "$INSTALL_DIR"
+
+# Create FLAT target directory
+mkdir -p "$INSTALL_DIR"
 
 # Copy plugin.yaml
-cp "$REPO_DIR/plugin.yaml" "$INSTALL_DIR/plugin.yaml"
+cp "$REPO_DIR/plugin.yaml" "$INSTALL_DIR/"
 
-# Copy all .py files from kortex/ to kortex/kortex/
-cp "$REPO_DIR/kortex/*.py" "$INSTALL_DIR/kortex/"
+# Copy all .py files FLAT (NOT into a nested kortex/ subdir)
+cp "$REPO_DIR/kortex/*.py" "$INSTALL_DIR/"
 
 # Clean up any stale __pycache__
 find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
