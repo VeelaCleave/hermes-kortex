@@ -98,7 +98,7 @@ class ExtractionLLMClient:
 
             return json.loads(content)
         except Exception as e:
-            logger.debug("ExtractionLLMClient.complete failed: %s", e)
+            logger.warning("[llm] client.complete failed: %s", e)
             return {}
 
 

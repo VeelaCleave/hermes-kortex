@@ -314,11 +314,10 @@ class KortexProvider(MemoryProvider):
                 # OCEAN scoring - BACKGROUND ONLY
                 self._update_ocean(user_clean, assistant_clean)
 
-                logger.debug(
-                    "KORTEX ingested turn %d (salience=%.2f, valence=%d, affect=%s)",
-                    ep.turn_index,
-                    ep.salience,
-                    ep.valence,
+                logger.info(
+                    "[sync] session=%s turn=%d episode=%d facts=%d loops=%d reflections=%d affect=%s",
+                    sid, ep.turn_index, ep.id, len(facts),
+                    len(resolved_loops), len(reflections),
                     calibrated_affect.dominant_emotion,
                 )
             except Exception:

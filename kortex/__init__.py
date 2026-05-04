@@ -9,6 +9,36 @@ Install: pip install hermes-kortex
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
+
+def _configure_logging() -> None:
+    """Configure kortex logger to write to ~/.hermes/logs/kortex.log."""
+    kortex_logger = logging.getLogger("kortex")
+    if kortex_logger.handlers:
+        return  # Already configured
+
+    log_dir = Path.home() / ".hermes" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "kortex.log"
+
+    handler = logging.FileHandler(log_path)
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
+    kortex_logger.addHandler(handler)
+    kortex_logger.setLevel(logging.INFO)
+    kortex_logger.info("KORTEX logging initialized")
+
+
+_configure_logging()
+
 from .config import load_kortex_config
 from .context_engine import KortexContextEngine
 from .provider import KortexProvider

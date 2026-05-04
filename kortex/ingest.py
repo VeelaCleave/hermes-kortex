@@ -255,6 +255,10 @@ class Ingestor:
         # Auto-embed episode for vector similarity search
         self._embed_episode(ep)
 
+        logger.info(
+            "[episode] id=%d session=%s user=%s salience=%.2f topics=%s",
+            ep.id, session_id, user_id, ep.salience, ep.topics,
+        )
         return ep
 
     def _get_semantic(self) -> SemanticSearch:
@@ -326,8 +330,14 @@ class Ingestor:
                 )
                 loop.id = self._db.insert_open_loop(loop)
                 loops.append(loop)
+                logger.info(
+                    "[loop] episode=%d kind=%s text=%s",
+                    episode_id, loop.kind, loop.text[:60],
+                )
                 break
 
+        if loops:
+            logger.info("[loops] episode=%d extracted=%d", episode_id, len(loops))
         return loops
 
     def extract_facts(
@@ -411,7 +421,13 @@ class Ingestor:
                 new_fact.id = self._db.insert_fact(new_fact)
                 results.append(new_fact)
                 self._embed_fact(new_fact)
+                logger.info(
+                    "[fact] episode=%d predicate=%s object=%s confidence=%.2f",
+                    episode_id, predicate, object_text[:80], new_fact.confidence,
+                )
 
+        if results:
+            logger.info("[facts] episode=%d extracted=%d", episode_id, len(results))
         return results
 
     def resolve_answered_loops(
@@ -520,12 +536,25 @@ class Ingestor:
             return None
         # Use LLM extraction whenever auxiliary_client is available,
         # regardless of extraction mode (augments heuristic patterns)
-        structured = extract_structured_memory(
-            user_text,
-            assistant_text,
-            auxiliary_client=self._auxiliary_client,
-        )
+        try:
+            structured = extract_structured_memory(
+                user_text,
+                assistant_text,
+                auxiliary_client=self._auxiliary_client,
+            )
+        except Exception as e:
+            logger.warning("[llm] extraction failed: %s", e)
+            return None
         if structured:
+            has_facts = bool(structured.get("facts"))
+            has_loops = bool(structured.get("open_loops"))
+            has_reflections = bool(structured.get("reflections"))
+            logger.info(
+                "[llm] extracted facts=%d loops=%d reflections=%d",
+                len(structured.get("facts", [])),
+                len(structured.get("open_loops", [])),
+                len(structured.get("reflections", [])),
+            )
             return structured
         return None
 
