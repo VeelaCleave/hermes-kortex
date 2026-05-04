@@ -29,7 +29,9 @@ mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/plugin.yaml" "$INSTALL_DIR/"
 
 # Copy all .py files FLAT (NOT into a nested kortex/ subdir)
-cp "$REPO_DIR/kortex/*.py" "$INSTALL_DIR/"
+for f in "$REPO_DIR/kortex/"*.py; do
+  cp "$f" "$INSTALL_DIR/"
+done
 
 # Clean up any stale __pycache__
 find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
