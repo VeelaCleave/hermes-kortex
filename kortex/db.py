@@ -2394,9 +2394,17 @@ class KortexDB:
         created_at = now_epoch()
         with self._tx() as conn:
             conn.execute(
-                """INSERT OR REPLACE INTO context_refs
+                """INSERT INTO context_refs
                    (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM context_refs WHERE ref_id=?), ?))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(ref_id) DO UPDATE SET
+                   conversation_id=excluded.conversation_id,
+                   ref_type=excluded.ref_type,
+                   label=excluded.label,
+                   payload_json=excluded.payload_json,
+                   source_span_id=excluded.source_span_id,
+                   salience=excluded.salience,
+                   open_state=excluded.open_state""",
                 (
                     ref_id,
                     conversation_id,
@@ -2406,8 +2414,7 @@ class KortexDB:
                     source_span_id,
                     salience,
                     open_state,
-                    ref_id,
-                    created_at,
+                    now_epoch(),
                 ),
             )
 
@@ -2423,29 +2430,31 @@ class KortexDB:
         """
         if not refs:
             return
-        created_at = now_epoch()
-        rows = []
-        for ref in refs:
-            rows.append((
-                ref["ref_id"],
-                conversation_id,
-                ref["ref_type"],
-                ref["label"],
-                json.dumps(ref["payload"], ensure_ascii=False, sort_keys=True),
-                ref.get("source_span_id"),
-                ref.get("salience", 0.0),
-                ref.get("open_state", "open"),
-                ref["ref_id"],
-                created_at,
-            ))
-
         with self._tx() as conn:
-            for row in rows:
+            for ref in refs:
                 conn.execute(
-                    """INSERT OR REPLACE INTO context_refs
+                    """INSERT INTO context_refs
                        (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[9])
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(ref_id) DO UPDATE SET
+                       conversation_id=excluded.conversation_id,
+                       ref_type=excluded.ref_type,
+                       label=excluded.label,
+                       payload_json=excluded.payload_json,
+                       source_span_id=excluded.source_span_id,
+                       salience=excluded.salience,
+                       open_state=excluded.open_state""",
+                    (
+                        ref["ref_id"],
+                        conversation_id,
+                        ref["ref_type"],
+                        ref["label"],
+                        json.dumps(ref["payload"], ensure_ascii=False, sort_keys=True),
+                        ref.get("source_span_id"),
+                        ref.get("salience", 0.0),
+                        ref.get("open_state", "open"),
+                        now_epoch(),
+                    )
                 )
 
     def insert_context_checkpoint(
