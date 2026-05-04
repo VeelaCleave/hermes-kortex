@@ -2440,12 +2440,13 @@ class KortexDB:
             ))
 
         with self._tx() as conn:
-            conn.executemany(
-                """INSERT OR REPLACE INTO context_refs
-                   (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM context_refs WHERE ref_id=?), ?))""",
-                rows,
-            )
+            for row in rows:
+                conn.execute(
+                    """INSERT OR REPLACE INTO context_refs
+                       (ref_id, conversation_id, ref_type, label, payload_json, source_span_id, salience, open_state, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[9])
+                )
 
     def insert_context_checkpoint(
         self,
