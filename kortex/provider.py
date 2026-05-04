@@ -337,6 +337,16 @@ class KortexProvider(MemoryProvider):
 
     def _make_ocean_score(self, existing) -> Any:
         from .ocean import OCEANScore
+        if isinstance(existing, dict):
+            return OCEANScore(
+                openness=existing['openness'],
+                conscientiousness=existing['conscientiousness'],
+                extraversion=existing['extraversion'],
+                agreeableness=existing['agreeableness'],
+                neuroticism=existing['neuroticism'],
+                confidence=existing['confidence'],
+                turn_count=existing['turn_count'],
+            )
         return OCEANScore(
             openness=existing.openness,
             conscientiousness=existing.conscientiousness,
