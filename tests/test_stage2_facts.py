@@ -78,8 +78,35 @@ class TestFactExtraction:
 
     def test_too_short_filtered(self, ingestor, kortex_db):
         ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
+        # Single-letter facts are now accepted (emoji support: "🍄" = 1 char)
         facts = ingestor.extract_facts("I prefer X", ep.id)
-        assert len(facts) == 0
+        assert len(facts) == 1
+        assert facts[0].object_text == "X"
+
+    def test_emoji_facts(self, ingestor, kortex_db):
+        """Emoji-only facts should be extracted and stored correctly."""
+        ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
+        facts = ingestor.extract_facts("I hate 🍄", ep.id)
+        assert len(facts) == 1
+        assert facts[0].object_text == "🍄"
+        assert facts[0].predicate == "dislikes"
+
+    def test_emoji_mixed_facts(self, ingestor, kortex_db):
+        """Facts with emoji + text should work."""
+        ep = ingestor.ingest_turn("msg", "resp", session_id="s1")
+        facts = ingestor.extract_facts("I hate 🍄 mushrooms", ep.id)
+        assert len(facts) == 1
+        assert facts[0].object_text == "🍄 mushrooms"
+
+    def test_emoji_normalize_preserves_emoji(self, ingestor, kortex_db):
+        """Normalize should preserve emoji while stripping ASCII punctuation."""
+        assert Ingestor._normalize_text("🍄") == "🍄"
+        assert Ingestor._normalize_text("🍄 mushrooms!") == "🍄 mushrooms"
+
+    def test_emoji_facts_are_equivalent(self, ingestor, kortex_db):
+        """Emoji facts should match correctly."""
+        assert Ingestor._facts_are_equivalent("🍄", "🍄") is True
+        assert Ingestor._facts_are_equivalent("mushrooms", "mushrooms") is True
 
     def test_facts_stored_in_db(self, ingestor, kortex_db):
         ep = ingestor.ingest_turn("msg", "resp", session_id="s1")

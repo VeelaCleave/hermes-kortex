@@ -82,94 +82,37 @@ _QUESTION_PATTERNS = [
 
 # --- Stage 2: Fact extraction patterns ---
 
+# Terminator: matches end-of-fact boundaries (period+space, comma, exclaim, question, or end-of-string)
+_FACT_END = r'(?:\.(?:\s|$)|,|!|\?|$)'
+
 # "I prefer X", "I like X", "I use X", "I'm a X", "I work with/on/at X"
 _PREFERENCE_PATTERNS = [
-    (
-        re.compile(
-            r"\bI (?:prefer|like|enjoy|love)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I
-        ),
-        "prefers",
-    ),
-    (
-        re.compile(
-            r"\bI (?:hate|dislike|can'?t stand|despise)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "dislikes",
-    ),
-    (
-        re.compile(
-            r"\bI (?:always|usually|typically)\s+(?:use|work with)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "uses",
-    ),
-    (re.compile(r"\bI use\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I), "uses"),
-    (
-        re.compile(
-            r"\bmy (?:favorite|favourite)\s+\w+\s+is\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "prefers",
-    ),
+    (re.compile(r'\bI (?:prefer|like|enjoy|love)\s+(.+?)' + _FACT_END, re.I), "prefers"),
+    (re.compile(r'\bI (?:hate|dislike|cannot|despise)\s+(.+?)' + _FACT_END, re.I), "dislikes"),
+    (re.compile(r'\bI (?:always|usually|typically)\s+(?:use|work with)\s+(.+?)' + _FACT_END, re.I), "uses"),
+    (re.compile(r'\bI use\s+(.+?)' + _FACT_END, re.I), "uses"),
+    (re.compile(r'\bmy (?:favorite|favourite)\s+\w+\s+is\s+(.+?)' + _FACT_END, re.I), "prefers"),
 ]
 
 # "I'm a developer", "I work at Google", "I live in London"
 _IDENTITY_PATTERNS = [
-    (
-        re.compile(
-            r"\bI(?:'m| am) (?:a |an )?(\w[\w\s]{2,30}?)(?:\.(?:\s|$)|,|!|\?|$)", re.I
-        ),
-        "is",
-    ),
-    (
-        re.compile(r"\bI work (?:at|for)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I),
-        "works_at",
-    ),
-    (re.compile(r"\bI live in\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I), "lives_in"),
-    (re.compile(r"\bmy name is\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I), "named"),
-    (re.compile(r"\bcall me\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I), "named"),
-    (
-        re.compile(
-            r"\bI (?:work on|'m working on|am working on)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "works_on",
-    ),
+    (re.compile(r'\bI(?:\'m| am) (?:a |an )?(\w[\w\s]{2,30}?)(?:\.(?:\s|$)|,|!|\?|$)', re.I), "is"),
+    (re.compile(r'\bI work (?:at|for)\s+(.+?)' + _FACT_END, re.I), "works_at"),
+    (re.compile(r'\bI live in\s+(.+?)' + _FACT_END, re.I), "lives_in"),
+    (re.compile(r'\bmy name is\s+(.+?)' + _FACT_END, re.I), "named"),
+    (re.compile(r'\bcall me\s+(.+?)' + _FACT_END, re.I), "named"),
+    (re.compile(r'\bI (?:work on|\'m working on|am working on)\s+(.+?)' + _FACT_END, re.I), "works_on"),
 ]
 
 # "We decided to use X", "The project uses X", "We're going with X"
 _PROJECT_PATTERNS = [
-    (
-        re.compile(
-            r"\bwe (?:decided|agreed|chose) to\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I
-        ),
-        "decision",
-    ),
-    (
-        re.compile(
-            r"\b(?:the |our )?project (?:uses|is using|will use)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "project_uses",
-    ),
-    (
-        re.compile(
-            r"\bwe'?re going (?:with|to use)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)", re.I
-        ),
-        "decision",
-    ),
-    (
-        re.compile(
-            r"\b(?:the |our )?(?:stack|tech stack) (?:is|includes)\s+(.+?)(?:\.(?:\s|$)|,|!|\?|$)",
-            re.I,
-        ),
-        "stack",
-    ),
+    (re.compile(r'\bwe (?:decided|agreed|chose) to\s+(.+?)' + _FACT_END, re.I), "decision"),
+    (re.compile(r'\b(?:the |our )?project (?:uses|is using|will use)\s+(.+?)' + _FACT_END, re.I), "project_uses"),
+    (re.compile(r'\bwe\'re going (?:with|to use)\s+(.+?)' + _FACT_END, re.I), "decision"),
+    (re.compile(r'\b(?:the |our )?(?:stack|tech stack) (?:is|includes)\s+(.+?)' + _FACT_END, re.I), "stack"),
 ]
 
-_FACT_STOPWORDS = frozenset(
-    {
+_FACT_STOPWORDS = frozenset({
         "it",
         "that",
         "this",
@@ -195,8 +138,7 @@ _FACT_STOPWORDS = frozenset(
         "yes",
         "no",
         "maybe",
-    }
-)
+    })
 
 # Similarity threshold — words in common / total words to consider facts "similar"
 _SIMILARITY_THRESHOLD = 0.5
@@ -395,7 +337,7 @@ class Ingestor:
 
         for predicate, object_text in candidates:
             object_text = object_text.strip().rstrip(".,!?;:")
-            if len(object_text) < 3 or len(object_text) > 200:
+            if len(object_text) < 1 or len(object_text) > 200:
                 continue
             if object_text.lower() in _FACT_STOPWORDS:
                 continue
@@ -657,11 +599,12 @@ class Ingestor:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        """Normalize text for comparison: lowercase, strip punctuation, collapse spaces."""
+        """Normalize text for comparison: lowercase, strip ASCII punctuation, preserve emoji, collapse spaces."""
         import re
+        import string
         text = text.lower().strip()
-        # Remove trailing/leading punctuation on words
-        text = re.sub(r'[^\w\s]', '', text)
+        # Strip ASCII punctuation only (preserves Unicode/emoji characters)
+        text = text.translate(str.maketrans('', '', string.punctuation))
         # Collapse multiple spaces
         text = re.sub(r'\s+', ' ', text).strip()
         return text
