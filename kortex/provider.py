@@ -92,9 +92,27 @@ class KortexProvider(MemoryProvider):
 
         self._db = KortexDB(db_path)
         self._ingestor = Ingestor(self._db)
+
+        # Priority: explicit extraction_llm config > auxiliary_client from Hermes
+        auxiliary: Any = None
+        if self._config.extraction_llm_base_url and self._config.extraction_llm_model:
+            from .extract_llm import ExtractionLLMClient
+
+            auxiliary = ExtractionLLMClient(
+                base_url=self._config.extraction_llm_base_url,
+                model=self._config.extraction_llm_model,
+            )
+            logger.info(
+                "KORTEX using extraction LLM: %s model=%s",
+                self._config.extraction_llm_base_url,
+                self._config.extraction_llm_model,
+            )
+        else:
+            auxiliary = kwargs.get("auxiliary_client")
+
         self._ingestor.configure_extraction(
             mode=self._config.extraction_mode,
-            auxiliary_client=kwargs.get("auxiliary_client"),
+            auxiliary_client=auxiliary,
         )
         self._linker = Linker(self._db)
         self._recall = Recall(self._db, self._config, linker=self._linker)

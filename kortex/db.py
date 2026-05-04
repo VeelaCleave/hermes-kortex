@@ -399,7 +399,8 @@ CREATE INDEX IF NOT EXISTS idx_context_spans_conv_range
 ON context_spans (conversation_id, start_seq, end_seq);
 
 CREATE TABLE IF NOT EXISTS context_refs (
-    ref_id          TEXT PRIMARY KEY,
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref_id          TEXT UNIQUE NOT NULL,
     conversation_id TEXT NOT NULL REFERENCES context_conversations(conversation_id),
     ref_type        TEXT NOT NULL,
     label           TEXT NOT NULL,
@@ -421,19 +422,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS context_refs_fts USING fts5(
 
 CREATE TRIGGER IF NOT EXISTS context_refs_ai AFTER INSERT ON context_refs BEGIN
     INSERT INTO context_refs_fts(rowid, label, conversation_id)
-    VALUES (new.rowid, new.label, new.conversation_id);
+    VALUES (new.id, new.label, new.conversation_id);
 END;
 
 CREATE TRIGGER IF NOT EXISTS context_refs_ad AFTER DELETE ON context_refs BEGIN
     INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
-    VALUES ('delete', old.rowid, old.label, old.conversation_id);
+    VALUES ('delete', old.id, old.label, old.conversation_id);
 END;
 
 CREATE TRIGGER IF NOT EXISTS context_refs_au AFTER UPDATE ON context_refs BEGIN
     INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
-    VALUES ('delete', old.rowid, old.label, old.conversation_id);
+    VALUES ('delete', old.id, old.label, old.conversation_id);
     INSERT INTO context_refs_fts(rowid, label, conversation_id)
-    VALUES (new.rowid, new.label, new.conversation_id);
+    VALUES (new.id, new.label, new.conversation_id);
 END;
 
 CREATE TABLE IF NOT EXISTS context_checkpoints (
@@ -559,6 +560,41 @@ class KortexDB:
                 CREATE INDEX IF NOT EXISTS idx_embeddings_entity ON embeddings(entity_type, entity_id);
                 CREATE INDEX IF NOT EXISTS idx_embeddings_user ON embeddings(user_id);
             """)
+            # Fix context_refs FTS5 trigger bug: add explicit INTEGER PRIMARY KEY
+            # for proper rowid aliasing (context_refs had ref_id TEXT PRIMARY KEY
+            # without an integer pk, causing FTS5 rowid=text mismatch errors)
+            try:
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(context_refs)")]
+                if "id" not in cols:
+                    # Add id column as INTEGER PRIMARY KEY (becomes rowid alias)
+                    conn.execute("ALTER TABLE context_refs ADD COLUMN id INTEGER PRIMARY KEY")
+                    # Drop old broken triggers and recreate with new.id
+                    conn.execute("DROP TRIGGER IF EXISTS context_refs_ai")
+                    conn.execute("DROP TRIGGER IF EXISTS context_refs_ad")
+                    conn.execute("DROP TRIGGER IF EXISTS context_refs_au")
+                    conn.execute("""
+                        CREATE TRIGGER context_refs_ai AFTER INSERT ON context_refs BEGIN
+                            INSERT INTO context_refs_fts(rowid, label, conversation_id)
+                            VALUES (new.id, new.label, new.conversation_id);
+                        END
+                    """)
+                    conn.execute("""
+                        CREATE TRIGGER context_refs_ad AFTER DELETE ON context_refs BEGIN
+                            INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
+                            VALUES ('delete', old.id, old.label, old.conversation_id);
+                        END
+                    """)
+                    conn.execute("""
+                        CREATE TRIGGER context_refs_au AFTER UPDATE ON context_refs BEGIN
+                            INSERT INTO context_refs_fts(context_refs_fts, rowid, label, conversation_id)
+                            VALUES ('delete', old.id, old.label, old.conversation_id);
+                            INSERT INTO context_refs_fts(rowid, label, conversation_id)
+                            VALUES (new.id, new.label, new.conversation_id);
+                        END
+                    """)
+                    logger.info("Migrated context_refs to add INTEGER PRIMARY KEY id column")
+            except Exception as e:
+                logger.warning("context_refs FTS5 migration skipped: %s", e)
             from_version = 5
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

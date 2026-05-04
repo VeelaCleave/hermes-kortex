@@ -96,7 +96,7 @@ _PREFERENCE_PATTERNS = [
 
 # "I'm a developer", "I work at Google", "I live in London"
 _IDENTITY_PATTERNS = [
-    (re.compile(r'\bI(?:\'m| am) (?:a |an )?(\w[\w\s]{2,30}?)(?:\.(?:\s|$)|,|!|\?|$)', re.I), "is"),
+    (re.compile(r'\bI(?:\'m| am) (?:a |an )?((?:\w+(?:\s+\w+){1,10})(?=\s*[.,!?;:]\s*$|\s*$))', re.I), "is"),
     (re.compile(r'\bI work (?:at|for)\s+(.+?)' + _FACT_END, re.I), "works_at"),
     (re.compile(r'\bI live in\s+(.+?)' + _FACT_END, re.I), "lives_in"),
     (re.compile(r'\bmy name is\s+(.+?)' + _FACT_END, re.I), "named"),
@@ -138,6 +138,19 @@ _FACT_STOPWORDS = frozenset({
         "yes",
         "no",
         "maybe",
+        # Specific garbage phrases that produced junk facts
+        "going bed",
+        "going to bed",
+        "going to sleep",
+        "going to lunch",
+        "going to dinner",
+        "going to work",
+        "coming home",
+        "just kidding",
+        "just joking",
+        "ngl",
+        "rn",
+        "ikr",
     })
 
 # Similarity threshold — words in common / total words to consider facts "similar"
@@ -341,6 +354,21 @@ class Ingestor:
                 continue
             if object_text.lower() in _FACT_STOPWORDS:
                 continue
+            # Filter garbage identity phrases like "going to bed", "trying to fix"
+            lower = object_text.lower()
+            if any(
+                lower.startswith(prefix)
+                for prefix in (
+                    "going to ",
+                    "trying to ",
+                    "about to ",
+                    "ready to ",
+                    "going ",
+                    "trying ",
+                    "about ",
+                )
+            ):
+                continue
 
             existing = self._find_matching_fact(predicate, object_text, user_id=user_id)
 
@@ -354,6 +382,7 @@ class Ingestor:
                     new_fact = Fact(
                         user_id=user_id,
                         subject_type="user",
+                        subject_id=user_id,
                         predicate=predicate,
                         object_text=object_text[:500],
                         confidence=0.6,
@@ -373,6 +402,7 @@ class Ingestor:
                 new_fact = Fact(
                     user_id=user_id,
                     subject_type="user",
+                    subject_id=user_id,
                     predicate=predicate,
                     object_text=object_text[:500],
                     confidence=0.5,
@@ -486,11 +516,10 @@ class Ingestor:
     def _extract_structured_memory(
         self, user_text: str, assistant_text: str
     ) -> Optional[dict]:
-        if self._extraction_mode == "heuristic":
-            # LLM extraction only used when mode="llm" AND an auxiliary_client is provided
-            return None
         if self._auxiliary_client is None:
             return None
+        # Use LLM extraction whenever auxiliary_client is available,
+        # regardless of extraction mode (augments heuristic patterns)
         structured = extract_structured_memory(
             user_text,
             assistant_text,

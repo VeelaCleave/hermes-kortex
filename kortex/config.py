@@ -99,6 +99,10 @@ class KortexConfig:
     # Focus topic (optional, used for targeted context injection)
     focus_topic: Optional[str] = None
 
+    # LLM extraction — use a local vLLM/Ollama endpoint for fact/loop extraction
+    extraction_llm_base_url: Optional[str] = None  # e.g. "http://127.0.0.1:8000/v1"
+    extraction_llm_model: Optional[str] = None  # e.g. "aeon-backend"
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "KortexConfig":
         """Create config from a dict (e.g. from YAML)."""
@@ -155,6 +159,8 @@ class KortexConfig:
             recent_resolution_window_days=data.get("recent_resolution_window_days", 7.0),
             lightweight_context=data.get("lightweight_context", True),
             focus_topic=data.get("focus_topic"),
+            extraction_llm_base_url=data.get("extraction_llm_base_url"),
+            extraction_llm_model=data.get("extraction_llm_model"),
         )
 
 
