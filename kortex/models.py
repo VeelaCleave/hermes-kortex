@@ -132,6 +132,8 @@ class Fact:
     valid_from: Optional[float] = None
     valid_to: Optional[float] = None
     contradiction_status: str = "active"
+    topic: Optional[str] = None  # topic classification (e.g. "code", "personal", "work")
+    category: Optional[str] = None  # broader category (e.g. "preference", "identity", "state")
 
     @classmethod
     def from_db_row(cls, row: dict) -> "Fact":
@@ -153,6 +155,8 @@ class Fact:
             valid_from=parse_timestamp(row["valid_from"]),
             valid_to=parse_timestamp(row["valid_to"]),
             contradiction_status=row["contradiction_status"],
+            topic=row.get("topic"),
+            category=row.get("category"),
         )
 
 

@@ -308,8 +308,9 @@ class KortexProvider(MemoryProvider):
                     self._linker.link_related_episodes(ep, user_id=self._user_id)
 
                 if self._consolidator:
-                    self._consolidator.maybe_consolidate(user_id=self._user_id)
-                    self._trigger_daydream()
+                    result = self._consolidator.maybe_consolidate(user_id=self._user_id)
+                    if result.get("triggered"):
+                        self._trigger_daydream()
 
                 # OCEAN scoring - BACKGROUND ONLY
                 self._update_ocean(user_clean, assistant_clean)

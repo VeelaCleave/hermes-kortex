@@ -21,8 +21,10 @@ from .db import DEFAULT_USER_ID, KortexDB
 from .extract_llm import extract_structured_memory
 from .linker import Linker
 from .models import Episode, Fact, OpenLoop
+from .quality_gate import evaluate_fact_quality, should_keep_fact
 from .semantic import SemanticSearch
 from .time_utils import now_epoch
+from .topics import classify_fact
 
 logger = logging.getLogger(__name__)
 
@@ -379,6 +381,10 @@ class Ingestor:
                 )
             ):
                 continue
+            # Quality gate: filter ephemeral garbage predicates (e.g. "action taken", "spent time")
+            if not should_keep_fact(predicate, object_text):
+                logger.debug("[quality_gate] filtered fact: [%s] '%s'", predicate, object_text[:60])
+                continue
 
             existing = self._find_matching_fact(predicate, object_text, user_id=user_id)
 
@@ -389,6 +395,8 @@ class Ingestor:
                     self._db.bump_fact_last_seen(existing.id)
                     results.append(existing)
                 else:
+                    # Classify topic for new fact
+                    topic_info = classify_fact(object_text, predicate)
                     new_fact = Fact(
                         user_id=user_id,
                         subject_type="user",
@@ -397,6 +405,8 @@ class Ingestor:
                         object_text=object_text[:500],
                         confidence=0.6,
                         source_episode_id=episode_id,
+                        topic=topic_info.get("topic"),
+                        category=topic_info.get("category"),
                     )
                     new_fact.id = self._db.insert_fact(new_fact)
                     self._apply_fact_conflict(existing, new_fact)
@@ -409,6 +419,8 @@ class Ingestor:
                         object_text,
                     )
             else:
+                # Classify topic for new fact
+                topic_info = classify_fact(object_text, predicate)
                 new_fact = Fact(
                     user_id=user_id,
                     subject_type="user",
@@ -417,6 +429,8 @@ class Ingestor:
                     object_text=object_text[:500],
                     confidence=0.5,
                     source_episode_id=episode_id,
+                    topic=topic_info.get("topic"),
+                    category=topic_info.get("category"),
                 )
                 new_fact.id = self._db.insert_fact(new_fact)
                 results.append(new_fact)
@@ -815,8 +829,8 @@ class Ingestor:
         if re.search(r'\b(?:remind me|don\'t forget|make sure)\b', text_lower):
             score = max(score, 0.35)
 
-            score = max(score, 0.5)
-        return min(score, 1.0)
+        # Clamp to valid range — no artificial floor, let score reflect actual content
+        return min(max(score, 0.0), 1.0)
 
     def _score_valence(self, text: str) -> int:
         neg_count = sum(1 for p in _NEGATIVE_PATTERNS if p.search(text))

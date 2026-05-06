@@ -31,7 +31,7 @@ from .time_utils import now_epoch, parse_timestamp
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "__default__"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # OCEAN personality schema (Big Five: Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
 _OCEAN_SCHEMA_SQL = """
@@ -119,7 +119,9 @@ CREATE TABLE IF NOT EXISTS facts (
     retrieval_count         INTEGER NOT NULL DEFAULT 0,
     valid_from              REAL,
     valid_to                REAL,
-    contradiction_status    TEXT NOT NULL DEFAULT 'active'
+    contradiction_status    TEXT NOT NULL DEFAULT DEFAULT_CONTRADICTION_STATUS,
+    topic                   TEXT,
+    category                TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_facts_status ON facts(status);
@@ -597,6 +599,22 @@ class KortexDB:
                 logger.warning("context_refs FTS5 migration skipped: %s", e)
             from_version = 5
 
+        # v6: Add topic and category columns to facts table for classification
+        if from_version < 6:
+            try:
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(facts)")]
+                if "topic" not in cols:
+                    conn.execute("ALTER TABLE facts ADD COLUMN topic TEXT")
+                if "category" not in cols:
+                    conn.execute("ALTER TABLE facts ADD COLUMN category TEXT")
+                # Add indexes for topic-based queries
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_topic ON facts(topic)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category)")
+                logger.info("Migrated facts table to v6 (topic + category columns)")
+            except Exception as e:
+                logger.warning("Facts v6 migration skipped: %s", e)
+            from_version = 6
+
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._record_schema_version(conn)
         conn.commit()
@@ -656,7 +674,9 @@ class KortexDB:
                     retrieval_count         INTEGER NOT NULL DEFAULT 0,
                     valid_from              REAL,
                     valid_to                REAL,
-                    contradiction_status    TEXT NOT NULL DEFAULT 'active'
+                    contradiction_status    TEXT NOT NULL DEFAULT DEFAULT_CONTRADICTION_STATUS,
+                    topic                   TEXT,
+                    category                TEXT
                 );
 
                 CREATE TABLE open_loops_v3 (
@@ -823,8 +843,9 @@ class KortexDB:
                 """INSERT INTO facts_v3
                    (id, user_id, subject_type, subject_id, predicate, object_text, confidence,
                     source_episode_id, first_seen, last_seen, status, superseded_by,
-                    last_accessed_at, retrieval_count, valid_from, valid_to, contradiction_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    last_accessed_at, retrieval_count, valid_from, valid_to, contradiction_status,
+                    topic, category)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"],
                     DEFAULT_USER_ID,
@@ -843,6 +864,8 @@ class KortexDB:
                     first_seen,
                     None,
                     "active",
+                    None,
+                    None,
                 ),
             )
 
@@ -1301,8 +1324,9 @@ class KortexDB:
                 """INSERT INTO facts
                    (user_id, subject_type, subject_id, predicate, object_text, confidence,
                     source_episode_id, first_seen, last_seen, status, superseded_by,
-                    last_accessed_at, retrieval_count, valid_from, valid_to, contradiction_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    last_accessed_at, retrieval_count, valid_from, valid_to, contradiction_status,
+                    topic, category)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fact.user_id,
                     fact.subject_type,
@@ -1320,6 +1344,8 @@ class KortexDB:
                     fact.valid_from if fact.valid_from is not None else fact.first_seen,
                     fact.valid_to,
                     fact.contradiction_status,
+                    fact.topic,
+                    fact.category,
                 ),
             )
             fact.id = cur.lastrowid
